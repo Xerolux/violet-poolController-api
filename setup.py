@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="violet-poolController-api",
-    version="1.0.0",
+    version="0.0.1",
     author="Basti (Xerolux)",
     description="Asynchronous Python client for the Violet Pool Controller.",
     long_description=open("README.md").read(),
