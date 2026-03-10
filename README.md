@@ -1,4 +1,12 @@
-# Violet Pool API
+# Violet Pool Controller API
+
+[![PyPI version](https://img.shields.io/pypi/v/violet-poolController-api.svg?style=for-the-badge)](https://pypi.org/project/violet-poolController-api/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/violet-poolController-api.svg?style=for-the-badge)](https://pypistats.org/packages/violet-poolcontroller-api)
+[![Python versions](https://img.shields.io/pypi/pyversions/violet-poolController-api.svg?style=for-the-badge)](https://pypi.org/project/violet-poolController-api/)
+[![License](https://img.shields.io/github/license/Xerolux/violet-poolController-api.svg?style=for-the-badge)](LICENSE)
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-xerolux-yellow?logo=buy-me-a-coffee&style=for-the-badge)](https://www.buymeacoffee.com/xerolux)
+[![Tesla](https://img.shields.io/badge/Tesla-Referral-red?style=for-the-badge&logo=tesla)](https://ts.la/sebastian564489)
 
 An asynchronous Python client for interacting with the **Violet Pool Controller**.
 
@@ -12,14 +20,14 @@ This library is primarily designed to power the official [Violet Pool Controller
 ## Installation
 
 ```bash
-pip install violet-pool-api
+pip install violet-poolController-api
 ```
 
 ## Basic Usage
 
 ```python
 import asyncio
-from violet_pool_api.api import VioletPoolAPI
+from violet_poolcontroller_api.api import VioletPoolAPI
 
 async def main():
     # Initialize the API
