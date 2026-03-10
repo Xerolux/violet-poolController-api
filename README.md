@@ -27,26 +27,70 @@ pip install violet-poolController-api
 
 ```python
 import asyncio
-from violet_poolcontroller_api.api import VioletPoolAPI
+import aiohttp
+from violet_poolcontroller_api.api import VioletPoolAPI, VioletPoolAPIError
 
 async def main():
-    # Initialize the API
-    api = VioletPoolAPI(
-        host="192.168.1.100",
-        username="admin",
-        password="your_password"
-    )
+    # Create an aiohttp ClientSession
+    async with aiohttp.ClientSession() as session:
+        # Initialize the API
+        api = VioletPoolAPI(
+            host="192.168.1.100",
+            username="admin",
+            password="your_password",
+            session=session
+        )
 
-    try:
-        # Fetch current sensor readings
-        readings = await api.get_readings()
-        print(readings)
-    finally:
-        await api.close()
+        try:
+            # --- 1. Fetch current sensor readings ---
+            readings = await api.get_readings()
+            print("Current Pool Readings:")
+            print(readings)
+
+            # --- 2. Control the Filter Pump ---
+            # Set pump speed to 2 (Normal) permanently (duration=0)
+            await api.set_pump_speed(speed=2, duration=0)
+            print("\nPump speed set to 2.")
+
+            # --- 3. Set Target Temperature ---
+            # Set the target temperature for the heater to 28.5 degrees
+            await api.set_device_temperature("HEATER", 28.5)
+            print("\nHeater target temperature set to 28.5°C.")
+
+            # --- 4. Control Pool Lights ---
+            # Trigger the color pulse animation for the pool light
+            await api.set_light_color_pulse()
+            print("\nLight color pulse triggered.")
+
+        except VioletPoolAPIError as e:
+            print(f"An error occurred while communicating with the Violet controller: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+## Advanced Operations
+
+The API client includes many more functions tailored to the Violet Controller:
+- `get_config(["PUMP_SPEED_1", "PUMP_SPEED_2"])`: Fetch specific configuration values.
+- `set_ph_target(7.2)`: Change the pH target value.
+- `set_orp_target(750)`: Change the ORP (Redox) target value.
+- `set_pv_surplus(active=True)`: Enable the PV-Surplus mode.
+- `manual_dosing(dosing_type="Chlor", duration=120)`: Trigger manual chemical dosing.
+
+For a full list of available commands, please refer to the source code in `api.py`.
+
 ## License
 MIT License
+
+---
+
+## About the Violet Pool Controller
+
+Der **VIOLET Pool Controller** von [PoolDigital GmbH & Co. KG](https://www.pooldigital.de/) ist ein Premium Smart Pool Automation System aus deutscher Entwicklung – mit JSON API für nahtlose Home Assistant Integration.
+
+- **Offizieller Shop:** [pooldigital.de](https://www.pooldigital.de/)
+- **Community:** [PoolDigital Forum](http://forum.pooldigital.de/)
+
+**Disclaimer:**
+*This is an unofficial, community-driven project. It is not affiliated with, endorsed by, or associated with PoolDigital GmbH & Co. KG in any way. "VIOLET" and any related trademarks are the property of their respective owners.*
