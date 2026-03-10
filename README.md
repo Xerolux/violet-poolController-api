@@ -12,14 +12,14 @@ This library is primarily designed to power the official [Violet Pool Controller
 ## Installation
 
 ```bash
-pip install violet-pool-api
+pip install violet-poolController-api
 ```
 
 ## Basic Usage
 
 ```python
 import asyncio
-from violet_pool_api.api import VioletPoolAPI
+from violet_poolcontroller_api.api import VioletPoolAPI
 
 async def main():
     # Initialize the API
