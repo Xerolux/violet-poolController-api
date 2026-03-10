@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "violet-poolController-api"
-version = "1.0.0"
+version = "0.0.1"
 authors = [
-  { name="Basti (Xerolux)", email="xerolux@example.com" },
+  { name="Basti (Xerolux)", email="git@xerolux.de" },
 ]
 description = "Asynchronous Python client for the Violet Pool Controller."
 readme = "README.md"
