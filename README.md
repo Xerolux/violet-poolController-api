@@ -1,4 +1,4 @@
-# Violet Pool API
+# Violet Pool Controller API
 
 An asynchronous Python client for interacting with the **Violet Pool Controller**.
 
