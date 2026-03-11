@@ -12,6 +12,9 @@ An asynchronous Python client for interacting with the **Violet Pool Controller*
 
 This library is primarily designed to power the official [Violet Pool Controller Home Assistant Integration](https://github.com/Xerolux/violet-hass), but it can be used independently for any Python project that needs to fetch readings or control a Violet Pool system.
 
+> **📖 Wiki & Documentation:**
+> For comprehensive documentation, full usage examples, and all available endpoints, please visit the [Violet Pool Controller API Wiki](https://github.com/Xerolux/violet-poolController-api/wiki).
+
 ## Features
 * **Asynchronous:** Fully async operations using `aiohttp`.
 * **Resilient:** Built-in Circuit Breaker and Rate Limiter to protect both the client and the controller from overload.
@@ -78,7 +81,7 @@ The API client includes many more functions tailored to the Violet Controller:
 - `set_pv_surplus(active=True)`: Enable the PV-Surplus mode.
 - `manual_dosing(dosing_type="Chlor", duration=120)`: Trigger manual chemical dosing.
 
-For a full list of available commands, please refer to the source code in `api.py`.
+For a full list of available commands and more detailed examples, please refer to the [Wiki](https://github.com/Xerolux/violet-poolController-api/wiki) or the source code in `api.py`.
 
 ## License
 MIT License
