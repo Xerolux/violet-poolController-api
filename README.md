@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/violet-poolController-api.svg?style=for-the-badge)](https://pypi.org/project/violet-poolController-api/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/violet-poolController-api.svg?style=for-the-badge)](https://pypistats.org/packages/violet-poolcontroller-api)
 [![Python versions](https://img.shields.io/pypi/pyversions/violet-poolController-api.svg?style=for-the-badge)](https://pypi.org/project/violet-poolController-api/)
-[![License: PolyForm NC](https://img.shields.io/badge/License-PolyForm%20NC%201.0-blue?style=for-the-badge)](LICENSE)
+[![License: AGPL v3+](https://img.shields.io/badge/License-AGPL_v3%2B-blue?style=for-the-badge)](LICENSE)
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-xerolux-yellow?logo=buy-me-a-coffee&style=for-the-badge)](https://www.buymeacoffee.com/xerolux)
 [![Tesla](https://img.shields.io/badge/Tesla-Referral-red?style=for-the-badge&logo=tesla)](https://ts.la/sebastian564489)
