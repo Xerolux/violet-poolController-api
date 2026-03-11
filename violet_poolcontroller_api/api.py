@@ -242,7 +242,7 @@ class VioletPoolAPI:
                         json=json_payload,
                         auth=self._auth,
                         timeout=self._timeout,
-                        ssl=self._ssl_context,
+                        ssl=self._ssl_context if self._ssl_context is not None else True,
                     ) as response:
                         if response.status >= 500 or response.status == 429:
                             # Server error or rate limit -> trigger retry via ClientError
