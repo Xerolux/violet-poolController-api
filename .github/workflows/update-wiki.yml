@@ -15,16 +15,38 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Update Wiki
-        uses: spenserblack/actions-wiki@v0.2.2
-        with:
-          repository: ${{ github.repository }}
-          # The directory containing the markdown files to sync to the wiki
-          path: docs
-          # Commit message when pushing to the wiki repository
-          commit-message: "docs: Auto-update wiki from docs/ folder"
+      - name: Sync docs/ to Wiki
         env:
           # A personal access token (PAT) with `repo` scope is required
           # to push to the wiki repository. The default GITHUB_TOKEN does not have
           # permission to push to wikis. Create a PAT and add it as a repository secret.
-          GITHUB_TOKEN: ${{ secrets.WIKI_PAT }}
+          WIKI_PAT: ${{ secrets.WIKI_PAT }}
+        run: |
+          if [ -z "$WIKI_PAT" ]; then
+            echo "Error: WIKI_PAT secret is not set. Please create a Personal Access Token with 'repo' scope and add it as a repository secret named 'WIKI_PAT'."
+            exit 1
+          fi
+
+          # Setup Git
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Clone the Wiki repository
+          WIKI_DIR="wiki_repo"
+          git clone "https://${WIKI_PAT}@github.com/${GITHUB_REPOSITORY}.wiki.git" $WIKI_DIR
+
+          # Copy files from docs/ into the wiki repository
+          # This replaces existing files with the same names
+          cp -R docs/* $WIKI_DIR/
+
+          cd $WIKI_DIR
+          git add .
+
+          # Only commit and push if there are changes
+          if ! git diff-index --quiet HEAD; then
+            git commit -m "docs: auto-sync wiki from docs/ folder"
+            git push origin HEAD
+            echo "Wiki successfully updated."
+          else
+            echo "No changes detected in wiki."
+          fi
