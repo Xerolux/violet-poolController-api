@@ -11,9 +11,10 @@ authors = [
 description = "Asynchronous Python client for the Violet Pool Controller."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: OS Independent",
     "Intended Audience :: Developers",
     "Topic :: Home Automation",
@@ -22,10 +23,7 @@ dependencies = [
     "aiohttp>=3.9.0",
 ]
 
-[project.license]
-text = "PolyForm Noncommercial License 1.0.0"
-
 [project.urls]
 "Homepage" = "https://github.com/Xerolux/violet-poolController-api"
 "Bug Tracker" = "https://github.com/Xerolux/violet-poolController-api/issues"
-"License" = "https://polyformproject.org/licenses/noncommercial/1.0.0/"
+"License" = "https://www.gnu.org/licenses/agpl-3.0.html"
