@@ -84,7 +84,7 @@ The API client includes many more functions tailored to the Violet Controller:
 For a full list of available commands and more detailed examples, please refer to the [Wiki](https://github.com/Xerolux/violet-poolController-api/wiki) or the source code in `api.py`.
 
 ## License
-MIT License
+GNU Affero General Public License v3.0 or later (AGPLv3+)
 
 ---
 
