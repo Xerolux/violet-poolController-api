@@ -1,0 +1,30 @@
+name: Update GitHub Wiki
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'docs/**'
+
+jobs:
+  update-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Update Wiki
+        uses: spenserblack/actions-wiki@v0.2.2
+        with:
+          repository: ${{ github.repository }}
+          # The directory containing the markdown files to sync to the wiki
+          path: docs
+          # Commit message when pushing to the wiki repository
+          commit-message: "docs: Auto-update wiki from docs/ folder"
+        env:
+          # A personal access token (PAT) with `repo` scope is required
+          # to push to the wiki repository. The default GITHUB_TOKEN does not have
+          # permission to push to wikis. Create a PAT and add it as a repository secret.
+          GITHUB_TOKEN: ${{ secrets.WIKI_PAT }}
