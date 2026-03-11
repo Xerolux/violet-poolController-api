@@ -1,5 +1,4 @@
 from setuptools import setup, find_packages
-
 setup(
     name="violet-poolController-api",
     version="0.0.1",
@@ -10,10 +9,10 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/Xerolux/violet-poolController-api",
     packages=find_packages(),
-    license="PolyForm Noncommercial License 1.0.0",
+    license="AGPL-3.0-or-later",
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: Other/Proprietary License",
+        "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
         "Operating System :: OS Independent",
         "Intended Audience :: Developers",
         "Topic :: Home Automation",
@@ -24,6 +23,6 @@ setup(
     ],
     project_urls={
         "Bug Tracker": "https://github.com/Xerolux/violet-poolController-api/issues",
-        "License": "https://polyformproject.org/licenses/noncommercial/1.0.0/",
+        "License": "https://www.gnu.org/licenses/agpl-3.0.html",
     },
 )
