@@ -12,42 +12,32 @@ on:
 jobs:
   update-wiki:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Sync docs/ to Wiki
-        env:
-          # A personal access token (PAT) with `repo` scope is required
-          # to push to the wiki repository. The default GITHUB_TOKEN does not have
-          # permission to push to wikis. Create a PAT and add it as a repository secret.
-          WIKI_PAT: ${{ secrets.WIKI_PAT }}
+      - name: Clone wiki repository
         run: |
-          if [ -z "$WIKI_PAT" ]; then
-            echo "Error: WIKI_PAT secret is not set. Please create a Personal Access Token with 'repo' scope and add it as a repository secret named 'WIKI_PAT'."
-            exit 1
-          fi
+          git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git /tmp/wiki
+        env:
+          GIT_TERMINAL_PROMPT: 0
 
-          # Setup Git
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Copy files from docs/ to wiki
+        run: |
+          cp -R docs/* /tmp/wiki/
 
-          # Clone the Wiki repository
-          WIKI_DIR="wiki_repo"
-          git clone "https://${WIKI_PAT}@github.com/${GITHUB_REPOSITORY}.wiki.git" $WIKI_DIR
-
-          # Copy files from docs/ into the wiki repository
-          # This replaces existing files with the same names
-          cp -R docs/* $WIKI_DIR/
-
-          cd $WIKI_DIR
-          git add .
-
-          # Only commit and push if there are changes
-          if ! git diff-index --quiet HEAD; then
-            git commit -m "docs: auto-sync wiki from docs/ folder"
+      - name: Commit and push to wiki
+        working-directory: /tmp/wiki
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes detected in wiki."
+          else
+            git commit -m "docs: auto-sync wiki from docs/ folder [skip ci]"
             git push origin HEAD
             echo "Wiki successfully updated."
-          else
-            echo "No changes detected in wiki."
           fi
