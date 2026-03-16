@@ -37,6 +37,8 @@ async def main():
     # Create an aiohttp ClientSession
     async with aiohttp.ClientSession() as session:
         # Initialize the API
+        # Note: In a standard setup, just enter the IP address without a port.
+        # A port (e.g. "192.168.1.100:8080") can optionally be provided if you use a proxy or alternative setup.
         api = VioletPoolAPI(
             host="192.168.1.100",
             username="admin",
