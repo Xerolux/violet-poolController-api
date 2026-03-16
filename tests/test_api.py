@@ -73,3 +73,15 @@ async def test_request_server_error(mock_aioresponse, api_client):
         await api_client.get_readings()
 
     assert "Error communicating with Violet controller" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_init_with_port():
+    """Test initializing API with a port in the hostname."""
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(
+            host="192.168.1.100:8080",
+            session=session,
+            username="admin",
+            password="password"
+        )
+        assert api._base_url == "http://192.168.1.100:8080"

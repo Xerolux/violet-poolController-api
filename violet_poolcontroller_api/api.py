@@ -176,8 +176,8 @@ class VioletPoolAPI:
             parsed = urlparse(host)
             host = parsed.netloc
 
-        # Validate hostname format
-        if not re.match(r"^[a-zA-Z0-9.-]+$", host):
+        # Validate hostname format (allowing optional port)
+        if not re.match(r"^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?$", host):
             raise ValueError(f"Invalid hostname format: {host}")
 
         # Additional validation
