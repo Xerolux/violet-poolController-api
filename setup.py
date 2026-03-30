@@ -21,6 +21,13 @@ setup(
     install_requires=[
         "aiohttp>=3.9.0",
     ],
+    extras_require={
+        "test": [
+            "aioresponses>=0.7.6",
+            "pytest>=8.0",
+            "pytest-asyncio>=0.23",
+        ],
+    },
     project_urls={
         "Bug Tracker": "https://github.com/Xerolux/violet-poolController-api/issues",
         "License": "https://www.gnu.org/licenses/agpl-3.0.html",

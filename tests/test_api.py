@@ -19,6 +19,7 @@ import pytest
 import pytest_asyncio
 from aioresponses import aioresponses
 from violet_poolcontroller_api.api import VioletPoolAPI, VioletPoolAPIError
+from violet_poolcontroller_api.circuit_breaker import CircuitBreakerOpenError
 
 @pytest.fixture
 def mock_aioresponse():
@@ -53,7 +54,7 @@ async def test_get_readings_success(mock_aioresponse, api_client):
 @pytest.mark.asyncio
 async def test_set_pump_speed_success(mock_aioresponse, api_client):
     """Test set_pump_speed formats the request correctly and returns success."""
-    url = "http://192.168.1.100/setFunctionManually?PUMP%2CON%2C0%2C2"
+    url = "http://192.168.1.100/setFunctionManually?PUMP,ON,0,2"
     mock_aioresponse.get(url, body="OK", status=200)
 
     result = await api_client.set_pump_speed(speed=2, duration=0)
@@ -85,3 +86,18 @@ async def test_init_with_port():
             password="password"
         )
         assert api._base_url == "http://192.168.1.100:8080"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_open_is_wrapped(api_client, monkeypatch):
+    """Test circuit breaker open errors are exposed as VioletPoolAPIError."""
+
+    async def raise_open(_func, *args, **kwargs):
+        raise CircuitBreakerOpenError("Circuit breaker is OPEN")
+
+    monkeypatch.setattr(api_client._circuit_breaker, "call", raise_open)
+
+    with pytest.raises(VioletPoolAPIError) as exc_info:
+        await api_client.get_readings()
+
+    assert "Circuit breaker is open" in str(exc_info.value)

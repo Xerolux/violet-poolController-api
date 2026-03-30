@@ -60,7 +60,7 @@ from .const_api import (
     TARGET_ORP,
     TARGET_PH,
 )
-from .circuit_breaker import CircuitBreaker
+from .circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from .utils_rate_limiter import get_global_rate_limiter
 
 _LOGGER = logging.getLogger(__name__)
@@ -301,7 +301,12 @@ class VioletPoolAPI:
             # This should not happen in normal operation
             raise VioletPoolAPIError("Request completed but returned no data")
 
-        return await self._circuit_breaker.call(_execute_request)
+        try:
+            return await self._circuit_breaker.call(_execute_request)
+        except CircuitBreakerOpenError as err:
+            raise VioletPoolAPIError(
+                "Circuit breaker is open due to repeated communication failures"
+            ) from err
 
     @staticmethod
     def _command_result(body: str | dict[str, Any]) -> dict[str, Any]:
@@ -549,7 +554,10 @@ class VioletPoolAPI:
 
                 if isinstance(value, str):
                     sanitized_value = InputSanitizer.sanitize_string(
-                        value, max_length=1000, escape_html=True
+                        value,
+                        max_length=1000,
+                        allow_special_chars=True,
+                        escape_html=False,
                     )
                 elif isinstance(value, (int, float)):
                     sanitized_value = InputSanitizer.sanitize_numeric(value)
