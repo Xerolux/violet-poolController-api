@@ -12,8 +12,11 @@ An asynchronous Python client for interacting with the **Violet Pool Controller*
 
 This library is primarily designed to power the official [Violet Pool Controller Home Assistant Integration](https://github.com/Xerolux/violet-hass), but it can be used independently for any Python project that needs to fetch readings or control a Violet Pool system.
 
-> **📖 Wiki & Documentation:**
-> For comprehensive documentation, full usage examples, and all available endpoints, please visit the [Violet Pool Controller API Wiki](https://github.com/Xerolux/violet-poolController-api/wiki).
+> **📖 Documentation:**
+> - GitHub Pages: https://xerolux.github.io/violet-poolController-api/
+> - GitHub Wiki: https://github.com/Xerolux/violet-poolController-api/wiki
+>
+> The `docs/` directory is the single source of truth and is used for both GitHub Pages and Wiki sync.
 
 ## Features
 * **Asynchronous:** Fully async operations using `aiohttp`.
