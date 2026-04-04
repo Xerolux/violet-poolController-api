@@ -24,7 +24,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 from urllib.parse import quote, urlparse, urlunparse
 
@@ -62,6 +62,7 @@ from .const_api import (
 )
 from .circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from .utils_rate_limiter import get_global_rate_limiter
+from .utils_sanitizer import InputSanitizer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -367,185 +368,38 @@ class VioletPoolAPI:
                 f"Template for {key} requires missing field: {err.args[0]}"
             ) from err
 
-    # ---------------------------------------------------------------------
-    # Public API surface
-    # ---------------------------------------------------------------------
-
-    async def get_readings(self) -> dict[str, Any]:
-        """Returns the complete dataset from the controller.
-
-        Returns:
-            A dictionary containing all readings.
-
-        Raises:
-            VioletPoolAPIError: If the payload is unexpected.
-        """
-        response = await self._request(
-            API_READINGS,
-            query="ALL",
-            expect_json=True,
-        )
-        if not isinstance(response, dict):
-            raise VioletPoolAPIError("Unexpected payload returned from getReadings")
-        return response
-
-    async def get_specific_readings(
-        self, categories: list[str] | tuple[str, ...]
-    ) -> dict[str, Any]:
-        """Returns a reduced dataset for the provided categories.
-
-        Args:
-            categories: A list or tuple of category strings to fetch.
-
-        Returns:
-            A dictionary containing the requested readings.
-
-        Raises:
-            VioletPoolAPIError: If no categories are provided or the payload is unexpected.
-        """
-        if not categories:
-            raise VioletPoolAPIError("At least one category must be provided")
-
-        query = ",".join(category.strip() for category in categories if category)
+    @staticmethod
+    def _csv_query_from_values(values: Iterable[str], *, field_name: str) -> str:
+        """Build a comma-separated query string from a collection of values."""
+        query = ",".join(value.strip() for value in values if value and value.strip())
         if not query:
-            raise VioletPoolAPIError("No valid categories provided")
+            raise VioletPoolAPIError(f"No valid {field_name} provided")
+        return query
 
-        response = await self._request(
-            API_READINGS,
-            query=query,
-            expect_json=True,
-        )
-        if not isinstance(response, dict):
-            raise VioletPoolAPIError("Unexpected payload returned from getReadings")
-        return response
-
-    async def get_history(
-        self, *, hours: int = 24, sensor: str = "ALL"
+    async def _request_json_dict(
+        self,
+        endpoint: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        query: str | None = None,
+        payload_name: str,
     ) -> dict[str, Any]:
-        """Fetches historical readings from the controller.
-
-        Args:
-            hours: The number of hours of history to fetch.
-            sensor: The specific sensor to fetch history for, or "ALL".
-
-        Returns:
-            A dictionary containing the history data.
-
-        Raises:
-            VioletPoolAPIError: If the payload is unexpected.
-        """
-        safe_hours = max(1, int(hours))
-        params = {"hours": safe_hours, "sensor": sensor or "ALL"}
+        """Request JSON content and enforce a dictionary response shape."""
         response = await self._request(
-            API_GET_HISTORY,
+            endpoint,
             params=params,
-            expect_json=True,
-        )
-        if not isinstance(response, dict):
-            raise VioletPoolAPIError("Unexpected payload returned from getHistory")
-        return response
-
-    async def get_weather_data(self) -> dict[str, Any]:
-        """Returns the current weather information used by the controller.
-
-        Returns:
-            A dictionary containing weather data.
-
-        Raises:
-            VioletPoolAPIError: If the payload is unexpected.
-        """
-        response = await self._request(
-            API_GET_WEATHER_DATA,
-            expect_json=True,
-        )
-        if not isinstance(response, dict):
-            raise VioletPoolAPIError("Unexpected payload returned from getWeatherdata")
-        return response
-
-    async def get_overall_dosing(self) -> dict[str, Any]:
-        """Returns aggregated dosing statistics.
-
-        Returns:
-            A dictionary containing overall dosing statistics.
-
-        Raises:
-            VioletPoolAPIError: If the payload is unexpected.
-        """
-        response = await self._request(
-            API_GET_OVERALL_DOSING,
+            query=query,
             expect_json=True,
         )
         if not isinstance(response, dict):
             raise VioletPoolAPIError(
-                "Unexpected payload returned from getOverallDosing"
+                f"Unexpected payload returned from {payload_name}"
             )
         return response
 
-    async def get_output_states(self) -> dict[str, Any]:
-        """Returns detailed information about output states.
-
-        Returns:
-            A dictionary containing output states.
-
-        Raises:
-            VioletPoolAPIError: If the payload is unexpected.
-        """
-        response = await self._request(
-            API_GET_OUTPUT_STATES,
-            expect_json=True,
-        )
-        if not isinstance(response, dict):
-            raise VioletPoolAPIError("Unexpected payload returned from getOutputstates")
-        return response
-
-    async def get_config(
-        self, parameters: list[str] | tuple[str, ...]
-    ) -> dict[str, Any]:
-        """Fetches controller configuration values for the provided keys.
-
-        Args:
-            parameters: A list or tuple of configuration keys to fetch.
-
-        Returns:
-            A dictionary containing the configuration values.
-
-        Raises:
-            VioletPoolAPIError: If no keys are provided or the payload is unexpected.
-        """
-        if not parameters:
-            raise VioletPoolAPIError("At least one configuration key is required")
-
-        query = ",".join(param.strip() for param in parameters if param)
-        if not query:
-            raise VioletPoolAPIError("No valid configuration keys provided")
-
-        response = await self._request(
-            API_GET_CONFIG,
-            query=query,
-            expect_json=True,
-        )
-        if not isinstance(response, dict):
-            raise VioletPoolAPIError("Unexpected payload returned from getConfig")
-        return response
-
-    async def set_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
-        """Updates controller configuration values.
-
-        Args:
-            config: A mapping of configuration keys and values to update.
-
-        Returns:
-            A dictionary with command result.
-
-        Raises:
-            VioletPoolAPIError: If configuration payload is empty.
-        """
-        if not config:
-            raise VioletPoolAPIError("Configuration payload must not be empty")
-
-        # Sanitize all configuration parameters
-        sanitized_config = {}
-        from .utils_sanitizer import InputSanitizer
+    def _sanitize_config_payload(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """Sanitize and validate configuration payload before POSTing it."""
+        sanitized_config: dict[str, str | int | float] = {}
 
         for key, value in config.items():
             try:
@@ -565,12 +419,165 @@ class VioletPoolAPI:
                     sanitized_value = InputSanitizer.sanitize_string(str(value))
 
                 sanitized_config[sanitized_key] = sanitized_value
-
             except ValueError as err:
                 _LOGGER.error("Invalid config parameter %s: %s", key, err)
                 raise VioletPoolAPIError(
                     f"Invalid configuration parameter: {key}"
                 ) from err
+
+        return sanitized_config
+
+    # ---------------------------------------------------------------------
+    # Public API surface
+    # ---------------------------------------------------------------------
+
+    async def get_readings(self) -> dict[str, Any]:
+        """Returns the complete dataset from the controller.
+
+        Returns:
+            A dictionary containing all readings.
+
+        Raises:
+            VioletPoolAPIError: If the payload is unexpected.
+        """
+        return await self._request_json_dict(
+            API_READINGS,
+            query="ALL",
+            payload_name="getReadings",
+        )
+
+    async def get_specific_readings(
+        self, categories: list[str] | tuple[str, ...]
+    ) -> dict[str, Any]:
+        """Returns a reduced dataset for the provided categories.
+
+        Args:
+            categories: A list or tuple of category strings to fetch.
+
+        Returns:
+            A dictionary containing the requested readings.
+
+        Raises:
+            VioletPoolAPIError: If no categories are provided or the payload is unexpected.
+        """
+        if not categories:
+            raise VioletPoolAPIError("At least one category must be provided")
+
+        query = self._csv_query_from_values(categories, field_name="categories")
+        return await self._request_json_dict(
+            API_READINGS,
+            query=query,
+            payload_name="getReadings",
+        )
+
+    async def get_history(
+        self, *, hours: int = 24, sensor: str = "ALL"
+    ) -> dict[str, Any]:
+        """Fetches historical readings from the controller.
+
+        Args:
+            hours: The number of hours of history to fetch.
+            sensor: The specific sensor to fetch history for, or "ALL".
+
+        Returns:
+            A dictionary containing the history data.
+
+        Raises:
+            VioletPoolAPIError: If the payload is unexpected.
+        """
+        safe_hours = max(1, int(hours))
+        params = {"hours": safe_hours, "sensor": sensor or "ALL"}
+        return await self._request_json_dict(
+            API_GET_HISTORY,
+            params=params,
+            payload_name="getHistory",
+        )
+
+    async def get_weather_data(self) -> dict[str, Any]:
+        """Returns the current weather information used by the controller.
+
+        Returns:
+            A dictionary containing weather data.
+
+        Raises:
+            VioletPoolAPIError: If the payload is unexpected.
+        """
+        return await self._request_json_dict(
+            API_GET_WEATHER_DATA,
+            payload_name="getWeatherdata",
+        )
+
+    async def get_overall_dosing(self) -> dict[str, Any]:
+        """Returns aggregated dosing statistics.
+
+        Returns:
+            A dictionary containing overall dosing statistics.
+
+        Raises:
+            VioletPoolAPIError: If the payload is unexpected.
+        """
+        return await self._request_json_dict(
+            API_GET_OVERALL_DOSING,
+            payload_name="getOverallDosing",
+        )
+
+    async def get_output_states(self) -> dict[str, Any]:
+        """Returns detailed information about output states.
+
+        Returns:
+            A dictionary containing output states.
+
+        Raises:
+            VioletPoolAPIError: If the payload is unexpected.
+        """
+        return await self._request_json_dict(
+            API_GET_OUTPUT_STATES,
+            payload_name="getOutputstates",
+        )
+
+    async def get_config(
+        self, parameters: list[str] | tuple[str, ...]
+    ) -> dict[str, Any]:
+        """Fetches controller configuration values for the provided keys.
+
+        Args:
+            parameters: A list or tuple of configuration keys to fetch.
+
+        Returns:
+            A dictionary containing the configuration values.
+
+        Raises:
+            VioletPoolAPIError: If no keys are provided or the payload is unexpected.
+        """
+        if not parameters:
+            raise VioletPoolAPIError("At least one configuration key is required")
+
+        query = self._csv_query_from_values(
+            parameters,
+            field_name="configuration keys",
+        )
+        return await self._request_json_dict(
+            API_GET_CONFIG,
+            query=query,
+            payload_name="getConfig",
+        )
+
+    async def set_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """Updates controller configuration values.
+
+        Args:
+            config: A mapping of configuration keys and values to update.
+
+        Returns:
+            A dictionary with command result.
+
+        Raises:
+            VioletPoolAPIError: If configuration payload is empty.
+        """
+        if not config:
+            raise VioletPoolAPIError("Configuration payload must not be empty")
+
+        sanitized_config = self._sanitize_config_payload(config)
 
         body = await self._request(
             API_SET_CONFIG,
@@ -588,15 +595,10 @@ class VioletPoolAPI:
         Raises:
             VioletPoolAPIError: If the payload is unexpected.
         """
-        response = await self._request(
+        return await self._request_json_dict(
             API_GET_CALIB_RAW_VALUES,
-            expect_json=True,
+            payload_name="getCalibRawValues",
         )
-        if not isinstance(response, dict):
-            raise VioletPoolAPIError(
-                "Unexpected payload returned from getCalibRawValues"
-            )
-        return response
 
     async def get_calibration_history(self, sensor: str) -> list[dict[str, str]]:
         """Returns the calibration history for the provided sensor.

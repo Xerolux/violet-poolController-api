@@ -101,3 +101,67 @@ async def test_circuit_breaker_open_is_wrapped(api_client, monkeypatch):
         await api_client.get_readings()
 
     assert "Circuit breaker is open" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_specific_readings_requires_valid_categories(api_client):
+    """Test that empty category lists are rejected consistently."""
+    with pytest.raises(VioletPoolAPIError) as exc_info:
+        await api_client.get_specific_readings(["", "   "])
+
+    assert "No valid categories provided" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_set_config_rejects_path_traversal_parameter(api_client):
+    """Test config payload validation rejects dangerous parameter names."""
+    with pytest.raises(VioletPoolAPIError) as exc_info:
+        await api_client.set_config({"../../evil": "1"})
+
+    assert "Invalid configuration parameter" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_config_requires_non_empty_keys(api_client):
+    """Test whitespace-only config key lists are rejected."""
+    with pytest.raises(VioletPoolAPIError) as exc_info:
+        await api_client.get_config(["  ", ""])
+
+    assert "No valid configuration keys provided" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_history_normalizes_hours_and_sensor(api_client, monkeypatch):
+    """Test get_history enforces minimum hour value and ALL sensor fallback."""
+    captured: dict[str, object] = {}
+
+    async def fake_request(endpoint, **kwargs):
+        captured["endpoint"] = endpoint
+        captured["params"] = kwargs.get("params")
+        return {"ok": True}
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    result = await api_client.get_history(hours=0, sensor="")
+
+    assert result == {"ok": True}
+    assert captured["params"] == {"hours": 1, "sensor": "ALL"}
+
+
+@pytest.mark.asyncio
+async def test_set_config_sanitizes_payload_before_request(api_client, monkeypatch):
+    """Test set_config applies sanitizer before sending JSON payload."""
+    captured: dict[str, object] = {}
+
+    async def fake_request(endpoint, **kwargs):
+        captured["endpoint"] = endpoint
+        captured["json_payload"] = kwargs.get("json_payload")
+        return "OK"
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    result = await api_client.set_config({"pool mode": "A<mode>", "speed": 3.7})
+
+    assert result["success"] is True
+    assert result["response"] == "OK"
+    assert captured["json_payload"] == {"poolmode": "A<mode>", "speed": 3.7}
