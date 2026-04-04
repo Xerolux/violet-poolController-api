@@ -62,6 +62,11 @@ DEVICE_PARAMETERS = {
         "dosing_type": "pH+",
         "api_template": "DOS_5_PHP,{action},{duration},0",
     },
+    "DOS_2_ELO": {
+        "supports_timer": True,
+        "dosing_type": "Elektrolyse",
+        "api_template": "DOS_2_ELO,{action},{duration},0",
+    },
     "DOS_6_FLOC": {
         "supports_timer": True,
         "dosing_type": "Flockmittel",
