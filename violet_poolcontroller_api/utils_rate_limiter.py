@@ -103,14 +103,14 @@ class RateLimiter:
 
             # Periodic cleanup to prevent memory growth
             if current_time - self.last_cleanup_time > self.history_cleanup_interval:
-                await self._cleanup_history(current_time)
+                self._cleanup_history(current_time)
                 self.last_cleanup_time = current_time
 
             # Update recent statistics
             self._update_recent_stats(current_time)
 
             # Refill tokens
-            await self._refill_tokens(current_time)
+            self._refill_tokens(current_time)
 
             if self.tokens >= 1:
                 self.tokens -= 1
@@ -127,7 +127,7 @@ class RateLimiter:
             self._recent_stats["blocked_last_minute"] += 1
             return False
 
-    async def _cleanup_history(self, current_time: float) -> None:
+    def _cleanup_history(self, current_time: float) -> None:
         """Clean up old history entries to prevent memory leaks."""
         # Remove entries older than 1 hour
         cutoff_time = current_time - 3600
@@ -176,7 +176,7 @@ class RateLimiter:
             # Warte auf Token-Refill
             await asyncio.sleep(self.retry_after)
 
-    async def _refill_tokens(self, current_time: float) -> None:
+    def _refill_tokens(self, current_time: float) -> None:
         """Fülle Token-Bucket basierend auf verstrichener Zeit."""
         time_passed = current_time - self.last_refill
 

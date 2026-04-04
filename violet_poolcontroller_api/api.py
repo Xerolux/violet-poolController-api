@@ -109,10 +109,11 @@ class VioletPoolAPI:
         self._base_url = self._build_secure_base_url(host, use_ssl).rstrip("/")
 
         self._session = session
+        total_timeout = max(float(timeout), 1.0)
         self._timeout = aiohttp.ClientTimeout(
-            total=max(float(timeout), 1.0),
-            connect=max(float(timeout) * 0.8, 5.0),  # 80% of timeout for connection
-            sock_connect=max(float(timeout) * 0.8, 5.0),  # 80% for socket connection
+            total=total_timeout,
+            connect=total_timeout * 0.8,
+            sock_connect=total_timeout * 0.8,
         )
         self._max_retries = max(1, int(max_retries))
         self._auth = None
