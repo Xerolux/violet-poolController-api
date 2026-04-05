@@ -135,8 +135,9 @@ class CircuitBreaker:
 
         except self.expected_exception as err:
             async with self._lock:
+                failure_time = time.monotonic()
                 self.failure_count += 1
-                self.last_failure_time = current_time
+                self.last_failure_time = failure_time
 
                 _LOGGER.debug(
                     "Circuit breaker failure %d/%d: %s",

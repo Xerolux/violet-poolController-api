@@ -84,6 +84,13 @@ DEVICE_PARAMETERS = {
         "supports_speed": True,
         "api_template": "PVSURPLUS,{action},{speed},0",
     },
+    "ECO": {
+        "api_template": "ECO,{action},0,0",
+    },
+    "REFILL": {
+        "supports_timer": True,
+        "api_template": "REFILL,{action},{duration},0",
+    },
 }
 
 # Dynamically add extension relays

@@ -266,10 +266,13 @@ class VioletPoolAPI:
                             # Server error or rate limit -> trigger retry via ClientError
                             response.raise_for_status()
 
-                        if response.status >= 400:
+                        if response.status >= 400 and response.status < 500:
                             body = await response.text()
-                            raise VioletPoolAPIError(
-                                f"HTTP {response.status} for {endpoint}: {body.strip()}"
+                            raise aiohttp.ClientResponseError(
+                                request_info=response.request_info,
+                                history=response.history,
+                                status=response.status,
+                                message=f"HTTP {response.status} for {endpoint}: {body.strip()}",
                             )
 
                         if expect_json:
@@ -299,9 +302,7 @@ class VioletPoolAPI:
                     delay = min(2.0, 0.2 * (2 ** (attempt - 1)))
                     await asyncio.sleep(delay)
 
-            # If we reach here, all retries succeeded but returned no data
-            # This should not happen in normal operation
-            raise VioletPoolAPIError("Request completed but returned no data")
+            raise VioletPoolAPIError("All retry attempts exhausted")
 
         try:
             return await self._circuit_breaker.call(_execute_request)
