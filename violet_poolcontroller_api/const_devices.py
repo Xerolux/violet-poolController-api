@@ -30,7 +30,7 @@ from typing import Any, cast
 # DEVICE PARAMETERS - Extended Configuration
 # =============================================================================
 
-DEVICE_PARAMETERS = {
+DEVICE_PARAMETERS: dict[str, dict[str, Any]] = {
     "PUMP": {
         "supports_speed": True,
         "api_template": "PUMP,{action},{duration},{speed}",

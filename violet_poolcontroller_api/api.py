@@ -640,8 +640,9 @@ class VioletPoolAPI:
                         "Skipping malformed calibration history line: %s", line
                     )
             except (IndexError, AttributeError) as err:
+                err_msg = str(err) or type(err).__name__
                 _LOGGER.warning(
-                    "Error parsing calibration history line '%s': %s", line, err
+                    "Error parsing calibration history line '%s': %s", line, err_msg
                 )
         return entries
 
@@ -803,7 +804,7 @@ class VioletPoolAPI:
         results: list[dict[str, Any]] = []
         for res in raw_results:
             if isinstance(res, Exception):
-                results.append({"success": False, "response": str(res)})
+                results.append({"success": False, "response": f"{type(res).__name__}: {str(res)}"})
             elif isinstance(res, dict):
                 results.append(res)
 
