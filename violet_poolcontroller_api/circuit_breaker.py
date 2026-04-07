@@ -22,12 +22,13 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from enum import StrEnum
 from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class CircuitBreakerState:
+class CircuitBreakerState(StrEnum):
     """Circuit breaker states."""
 
     CLOSED = "CLOSED"  # Normal operation
