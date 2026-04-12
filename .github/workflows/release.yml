@@ -45,7 +45,7 @@ jobs:
       - name: Determine next version
         id: version
         run: |
-          import re, sys, subprocess
+          import re, sys, subprocess, os
 
           mode = "${{ github.event.inputs.version_mode }}"
           custom = "${{ github.event.inputs.custom_version }}".strip()
