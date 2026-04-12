@@ -90,6 +90,7 @@ class VioletPoolAPI:
         verify_ssl: bool = True,
         timeout: int = 10,
         max_retries: int = 3,
+        dosing_standalone: bool = False,
     ) -> None:
         """Initializes the API helper.
 
@@ -102,6 +103,8 @@ class VioletPoolAPI:
             verify_ssl: Whether to verify SSL certificates (security feature).
             timeout: The request timeout in seconds.
             max_retries: The maximum number of retries for failed requests.
+            dosing_standalone: Whether the controller runs in dosing-standalone
+                mode without a connected base module.
         """
         if session is None:
             raise ValueError("A valid aiohttp session must be provided")
@@ -116,6 +119,7 @@ class VioletPoolAPI:
             sock_connect=total_timeout * 0.8,
         )
         self._max_retries = max(1, int(max_retries))
+        self._dosing_standalone = bool(dosing_standalone)
         self._auth = None
         if username:
             self._auth = aiohttp.BasicAuth(username, password or "")
@@ -165,6 +169,11 @@ class VioletPoolAPI:
             The maximum number of retry attempts.
         """
         return self._max_retries
+
+    @property
+    def dosing_standalone(self) -> bool:
+        """Return whether dosing-standalone mode is enabled."""
+        return self._dosing_standalone
 
     # ---------------------------------------------------------------------
     # Generic helpers
@@ -428,6 +437,30 @@ class VioletPoolAPI:
                 ) from err
 
         return sanitized_config
+
+    def _is_base_module_function(self, key: str) -> bool:
+        """Return True if the function depends on the base module."""
+        normalized = (key or "").strip().upper()
+        if not normalized:
+            return False
+
+        if normalized.startswith("DOS_"):
+            return False
+
+        if normalized.startswith(("EXT", "DMX_SCENE", "DIRULE_", "OMNI_DC")):
+            return True
+
+        return normalized in {
+            "PUMP",
+            "SOLAR",
+            "HEATER",
+            "LIGHT",
+            "ECO",
+            "BACKWASH",
+            "BACKWASHRINSE",
+            "REFILL",
+            "PVSURPLUS",
+        }
 
     # ---------------------------------------------------------------------
     # Public API surface
@@ -721,6 +754,12 @@ class VioletPoolAPI:
         Returns:
             A dictionary with the command result.
         """
+        if self._dosing_standalone and self._is_base_module_function(key):
+            raise VioletPoolAPIError(
+                f"Function '{key}' requires the Violet base module and is not "
+                "available in dosing-standalone mode"
+            )
+
         payload = self._build_manual_command(
             key,
             action,

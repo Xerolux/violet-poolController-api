@@ -1,5 +1,7 @@
 # Dosing & Targets
 
+All commands in this section are supported in standard Violet setups and in dosing-standalone mode (`dosing_standalone=True`).
+
 ## Target Values
 Update your pool's chemistry targets:
 ```python

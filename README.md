@@ -46,7 +46,8 @@ async def main():
             host="192.168.1.100",
             username="admin",
             password="your_password",
-            session=session
+            session=session,
+            dosing_standalone=False,  # True for Violet dosing standalone setups
         )
 
         try:
@@ -87,6 +88,22 @@ The API client includes many more functions tailored to the Violet Controller:
 - `manual_dosing(dosing_type="Chlor", duration=120)`: Trigger manual chemical dosing.
 
 For a full list of available commands and more detailed examples, please refer to the [Wiki](https://github.com/Xerolux/violet-poolController-api/wiki) or the source code in `api.py`.
+
+## Violet Dosing Standalone Mode
+
+If your Violet setup runs as dosing standalone (without the base module), enable:
+
+```python
+api = VioletPoolAPI(
+    host="192.168.1.100",
+    username="admin",
+    password="your_password",
+    session=session,
+    dosing_standalone=True,
+)
+```
+
+In this mode, dosing functions (for example `manual_dosing` and dosing parameter/target updates) stay available, while base-module-only switch functions (for example pump/light/backwash) are blocked with a clear error message.
 
 ## License
 GNU Affero General Public License v3.0 or later (AGPLv3+)

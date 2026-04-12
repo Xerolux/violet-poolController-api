@@ -39,6 +39,20 @@ async def api_client():
         )
         yield api
 
+
+@pytest_asyncio.fixture
+async def standalone_api_client():
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(
+            host="192.168.1.100",
+            session=session,
+            username="admin",
+            password="password",
+            max_retries=1,
+            dosing_standalone=True,
+        )
+        yield api
+
 @pytest.mark.asyncio
 async def test_get_readings_success(mock_aioresponse, api_client):
     """Test get_readings returns the correct parsed JSON dictionary."""
@@ -165,3 +179,26 @@ async def test_set_config_sanitizes_payload_before_request(api_client, monkeypat
     assert result["success"] is True
     assert result["response"] == "OK"
     assert captured["json_payload"] == {"poolmode": "A<mode>", "speed": 3.7}
+
+
+@pytest.mark.asyncio
+async def test_standalone_mode_allows_manual_dosing(
+    mock_aioresponse, standalone_api_client
+):
+    """Standalone mode must still allow dosing outputs."""
+    url = "http://192.168.1.100/setFunctionManually?DOS_1_CL,ON,45,0"
+    mock_aioresponse.get(url, body="OK", status=200)
+
+    result = await standalone_api_client.manual_dosing("Chlor", 45)
+
+    assert result["success"] is True
+    assert result["response"] == "OK"
+
+
+@pytest.mark.asyncio
+async def test_standalone_mode_blocks_base_module_functions(standalone_api_client):
+    """Standalone mode must reject functions that require the base module."""
+    with pytest.raises(VioletPoolAPIError) as exc_info:
+        await standalone_api_client.set_pump_speed(speed=2, duration=0)
+
+    assert "requires the Violet base module" in str(exc_info.value)

@@ -17,7 +17,8 @@ async def main():
             use_ssl=False,           # Set to True if you use HTTPS
             verify_ssl=True,
             timeout=10,              # Request timeout in seconds
-            max_retries=3
+            max_retries=3,
+            dosing_standalone=False  # Set to True for dosing-only standalone setups
         )
 
         # Now you can call api methods...
