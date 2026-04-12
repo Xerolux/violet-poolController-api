@@ -202,3 +202,32 @@ async def test_standalone_mode_blocks_base_module_functions(standalone_api_clien
         await standalone_api_client.set_pump_speed(speed=2, duration=0)
 
     assert "requires the Violet base module" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_get_readings_standalone_list_format(mock_aioresponse, api_client):
+    """Test get_readings parses the standalone list format correctly."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_data = {
+        "getReadings": [
+            {
+                "VALUE NAME": "   \"date\"",
+                "DESCRIPTION": "System-date",
+                "FORMAT": "STRING",
+                "DETAILS": "deliverd as TT.MM.YYYY",
+                "VALUE": "12.04.2023"
+            },
+            {
+                "VALUE NAME": "   \"CPU_TEMP\"",
+                "DESCRIPTION": "CPU-Temperature",
+                "FORMAT": "FLOAT",
+                "DETAILS": None,
+                "VALUE": 45.5
+            }
+        ]
+    }
+    mock_aioresponse.get(url, payload=mock_data, status=200)
+
+    result = await api_client.get_readings()
+
+    assert isinstance(result, dict)
+    assert result == {"date": "12.04.2023", "CPU_TEMP": 45.5}

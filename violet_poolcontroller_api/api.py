@@ -466,6 +466,35 @@ class VioletPoolAPI:
     # Public API surface
     # ---------------------------------------------------------------------
 
+
+    def _flatten_getreadings_response(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Flattens the getReadings list response if it matches the standalone firmware format.
+
+        Args:
+            response: The raw response dictionary from the controller.
+
+        Returns:
+            The flattened key-value dictionary, or the original response if not applicable.
+        """
+        if "getReadings" in response and isinstance(response["getReadings"], list):
+            flat_dict: dict[str, Any] = {}
+            for item in response["getReadings"]:
+                if isinstance(item, dict) and item.get("VALUE NAME"):
+                    key = str(item["VALUE NAME"]).strip().strip('"')
+                    # Value might be in 'VALUE' or other fields, we just ensure it's not breaking
+                    # The standalone docs output actually doesn't include live values,
+                    # but if it did, they would likely be in a 'VALUE' or similar key.
+                    # As a fallback, we extract the entire item or specifically handle known keys.
+                    val = item.get("VALUE", item.get("VALUE ", item.get("value")))
+                    flat_dict[key] = val
+            return flat_dict
+
+        # If it's the traditional dict format nested under getReadings
+        if "getReadings" in response and isinstance(response["getReadings"], dict):
+            return response["getReadings"]
+
+        return response
+
     async def get_readings(self) -> dict[str, Any]:
         """Returns the complete dataset from the controller.
 
@@ -475,11 +504,12 @@ class VioletPoolAPI:
         Raises:
             VioletPoolAPIError: If the payload is unexpected.
         """
-        return await self._request_json_dict(
+        response = await self._request_json_dict(
             API_READINGS,
             query="ALL",
             payload_name="getReadings",
         )
+        return self._flatten_getreadings_response(response)
 
     async def get_specific_readings(
         self, categories: list[str] | tuple[str, ...]
@@ -499,11 +529,12 @@ class VioletPoolAPI:
             raise VioletPoolAPIError("At least one category must be provided")
 
         query = self._csv_query_from_values(categories, field_name="categories")
-        return await self._request_json_dict(
+        response = await self._request_json_dict(
             API_READINGS,
             query=query,
             payload_name="getReadings",
         )
+        return self._flatten_getreadings_response(response)
 
     async def get_history(
         self, *, hours: int = 24, sensor: str = "ALL"

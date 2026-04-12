@@ -105,6 +105,9 @@ api = VioletPoolAPI(
 
 In this mode, dosing functions (for example `manual_dosing` and dosing parameter/target updates) stay available, while base-module-only switch functions (for example pump/light/backwash) are blocked with a clear error message.
 
+**Note on getReadings format:**
+As of version `0.0.7`, the API client automatically detects and normalizes the payload output from the controller. Whether your Violet Controller returns the classic base-module `dict` structure (`{"PUMPSTATE": "2", "PH": 7.2}`) or the new standalone `list` structure, the `get_readings()` and `get_specific_readings()` functions will always return a seamless, flattened key-value dictionary. Your Home Assistant integration or downstream application will work uniformly with both formats without requiring any extra code!
+
 ## License
 GNU Affero General Public License v3.0 or later (AGPLv3+)
 
