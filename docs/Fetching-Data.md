@@ -30,3 +30,8 @@ If configured on the controller, fetch current weather data:
 ```python
 weather = await api.get_weather_data()
 ```
+## Violet Dosing Standalone Mode
+
+The API client seamlessly supports the Violet Dosing Standalone controller. While the original Base Module controller generally returns a flat JSON dictionary of key-value pairs (e.g., `{"PUMPSTATE": "2", "PH": 7.2}`), the newer Standalone version sometimes provides payloads as a list of dictionaries outlining parameter schemas and values.
+
+As of version `0.0.7`, `violet-poolController-api` automatically detects these list-based payloads from the standalone firmware and flattens them into the standard dictionary format. This means your downstream applications (such as Home Assistant) require **no modifications** and will work uniformly whether you are communicating with a Base Module or a Dosing Standalone Module!
