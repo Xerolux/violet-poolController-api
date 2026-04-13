@@ -2,6 +2,9 @@
 
 ### Commits since v0.0.8
 
+- 9a48bbf pypi-environment
+- 73746c2 fix(github): Add environment claim to trusted PyPI publishing workflow
+- d11b9c8 chore: bump version to 0.0.9
 - 628364e fix-auto-detect-dosing-standalone
 - d53a9e0 Merge branch 'main' into fix-auto-detect-dosing-standalone-6258129374762791943
 - 761ae52 fix: resolve PyPI publishing OIDC permission issue
