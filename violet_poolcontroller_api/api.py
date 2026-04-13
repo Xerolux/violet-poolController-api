@@ -478,9 +478,11 @@ class VioletPoolAPI:
             return response
 
         if isinstance(readings, dict):
+            self._dosing_standalone = False
             return readings
 
         if isinstance(readings, list):
+            self._dosing_standalone = True
             flat_dict: dict[str, Any] = {}
             for item in readings:
                 if isinstance(item, dict) and item.get("VALUE NAME"):
