@@ -113,11 +113,7 @@ class VioletPoolAPI:
 
         self._session = session
         total_timeout = max(float(timeout), 1.0)
-        self._timeout = aiohttp.ClientTimeout(
-            total=total_timeout,
-            connect=total_timeout * 0.8,
-            sock_connect=total_timeout * 0.8,
-        )
+        self._timeout = aiohttp.ClientTimeout(total=total_timeout)
         self._max_retries = max(1, int(max_retries))
         self._dosing_standalone = bool(dosing_standalone)
         self._auth = None
@@ -207,7 +203,8 @@ class VioletPoolAPI:
         Returns:
             The full URL.
         """
-        endpoint = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+        if not endpoint.startswith("/"):
+            endpoint = f"/{endpoint}"
         return f"{self._base_url}{endpoint}"
 
     async def _request(
@@ -382,7 +379,7 @@ class VioletPoolAPI:
     @staticmethod
     def _csv_query_from_values(values: Iterable[str], *, field_name: str) -> str:
         """Build a comma-separated query string from a collection of values."""
-        query = ",".join(value.strip() for value in values if value and value.strip())
+        query = ",".join([v for value in values if (v := value.strip())])
         if not query:
             raise VioletPoolAPIError(f"No valid {field_name} provided")
         return query
@@ -476,9 +473,16 @@ class VioletPoolAPI:
         Returns:
             The flattened key-value dictionary, or the original response if not applicable.
         """
-        if "getReadings" in response and isinstance(response["getReadings"], list):
+        readings = response.get("getReadings")
+        if not readings:
+            return response
+
+        if isinstance(readings, dict):
+            return readings
+
+        if isinstance(readings, list):
             flat_dict: dict[str, Any] = {}
-            for item in response["getReadings"]:
+            for item in readings:
                 if isinstance(item, dict) and item.get("VALUE NAME"):
                     key = str(item["VALUE NAME"]).strip().strip('"')
                     # Value might be in 'VALUE' or other fields, we just ensure it's not breaking
@@ -488,10 +492,6 @@ class VioletPoolAPI:
                     val = item.get("VALUE", item.get("VALUE ", item.get("value")))
                     flat_dict[key] = val
             return flat_dict
-
-        # If it's the traditional dict format nested under getReadings
-        if "getReadings" in response and isinstance(response["getReadings"], dict):
-            return response["getReadings"]
 
         return response
 

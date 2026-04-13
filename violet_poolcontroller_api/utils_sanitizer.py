@@ -155,7 +155,10 @@ class InputSanitizer:
             Sanitisierter Integer
         """
         try:
-            int_value = int(float(value))
+            try:
+                int_value = int(value)
+            except (ValueError, TypeError):
+                int_value = int(float(value))
 
             # Range-Validierung
             if min_value is not None and int_value < min_value:
@@ -255,9 +258,9 @@ class InputSanitizer:
 
         if isinstance(value, str):
             lower_value = value.lower().strip()
-            if lower_value in ("true", "1", "yes", "on", "enabled"):
+            if lower_value in {"true", "1", "yes", "on", "enabled"}:
                 return True
-            if lower_value in ("false", "0", "no", "off", "disabled"):
+            if lower_value in {"false", "0", "no", "off", "disabled"}:
                 return False
 
         if isinstance(value, (int, float)):

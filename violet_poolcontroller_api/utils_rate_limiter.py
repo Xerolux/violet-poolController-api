@@ -132,13 +132,9 @@ class RateLimiter:
         # Remove entries older than 1 hour
         cutoff_time = current_time - 3600
 
-        # Filter while maintaining order
-        filtered_history = deque(
-            (entry for entry in self.request_history if entry["time"] > cutoff_time),
-            maxlen=500,
-        )
+        while self.request_history and self.request_history[0]["time"] <= cutoff_time:
+            self.request_history.popleft()
 
-        self.request_history = filtered_history
         _LOGGER.debug("Rate limiter history cleanup completed")
 
     def _update_recent_stats(self, current_time: float) -> None:
