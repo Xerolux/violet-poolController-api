@@ -227,7 +227,30 @@ async def test_get_readings_standalone_list_format(mock_aioresponse, api_client)
     }
     mock_aioresponse.get(url, payload=mock_data, status=200)
 
+    assert api_client.dosing_standalone is False
+
     result = await api_client.get_readings()
 
     assert isinstance(result, dict)
     assert result == {"date": "12.04.2023", "CPU_TEMP": 45.5}
+    assert api_client.dosing_standalone is True
+
+
+@pytest.mark.asyncio
+async def test_dosing_standalone_detection_dict_format(mock_aioresponse, standalone_api_client):
+    """Test dosing_standalone is set to False when dict format is received."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_data = {
+        "getReadings": {
+            "PUMPSTATE": "2",
+            "PH": 7.2
+        }
+    }
+    mock_aioresponse.get(url, payload=mock_data, status=200)
+
+    assert standalone_api_client.dosing_standalone is True
+
+    result = await standalone_api_client.get_readings()
+
+    assert isinstance(result, dict)
+    assert standalone_api_client.dosing_standalone is False
