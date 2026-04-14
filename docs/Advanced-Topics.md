@@ -13,6 +13,21 @@ Activate the controller's hardware test mode for a specific output.
 await api.set_output_test_mode(output="RELAY_1", mode="SWITCH", duration=120)
 ```
 
+## Hardware Profile Detection
+The API can dynamically detect which hardware modules are attached to your Violet Controller by interrogating `get_readings()`.
+
+```python
+profile = await api.get_hardware_profile()
+print(profile)
+# {
+#     "base_module": True,
+#     "dosing_module": True,
+#     "extension_module_1": True,
+#     "extension_module_2": False,
+# }
+```
+This looks for keys such as `SYSTEM_dosagemodule_cpu_temperature`, `EXT1_1`, and `EXT2_1` to definitively identify presence.
+
 ## Error Handling
 All API interactions can raise `VioletPoolAPIError`. It is recommended to wrap calls in a try-except block.
 ```python
