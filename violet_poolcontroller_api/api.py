@@ -511,7 +511,57 @@ class VioletPoolAPI:
             query="ALL",
             payload_name="getReadings",
         )
-        return self._flatten_getreadings_response(response)
+        flattened = self._flatten_getreadings_response(response)
+
+        # Determine hardware profile based on the flattened readings
+        def is_present(key: str) -> bool:
+            if not isinstance(flattened, dict):
+                return False
+            val = flattened.get(key)
+            return val is not None and str(val).strip().upper() != "N/A"
+
+        profile = {
+            "base_module": not self.dosing_standalone,
+            "dosing_module": self.dosing_standalone or is_present("SYSTEM_dosagemodule_cpu_temperature"),
+            "extension_module_1": is_present("EXT1_1"),
+            "extension_module_2": is_present("EXT2_1"),
+        }
+
+        return self._filter_unsupported_readings(flattened, profile)
+
+    def _filter_unsupported_readings(self, readings: dict[str, Any], profile: dict[str, bool]) -> dict[str, Any]:
+        """Filters out readings for hardware modules that are not present."""
+        if not isinstance(readings, dict):
+            return readings
+
+        filtered_readings = {}
+        for key, value in readings.items():
+            normalized_key = key.upper()
+
+            # Base Module specific keys
+            if not profile.get("base_module"):
+                if normalized_key in {
+                    "PUMPSTATE", "PUMP_SPEED", "HEATER", "LIGHT", "ECO",
+                    "BACKWASH", "BACKWASHRINSE", "REFILL", "PVSURPLUS", "TEMP_PUMP"
+                } or (normalized_key.startswith("SYSTEM_") and normalized_key != "SYSTEM_DOSAGEMODULE_CPU_TEMPERATURE"):
+                    continue
+
+            # Extension Module 1 specific keys
+            if not profile.get("extension_module_1") and normalized_key.startswith("EXT1_"):
+                continue
+
+            # Extension Module 2 specific keys
+            if not profile.get("extension_module_2") and normalized_key.startswith("EXT2_"):
+                continue
+
+            # Dosing Module specific keys
+            if not profile.get("dosing_module"):
+                if normalized_key.startswith("DOS_") or normalized_key == "SYSTEM_DOSAGEMODULE_CPU_TEMPERATURE":
+                    continue
+
+            filtered_readings[key] = value
+
+        return filtered_readings
 
     async def get_specific_readings(
         self, categories: list[str] | tuple[str, ...]
