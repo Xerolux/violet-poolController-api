@@ -108,6 +108,21 @@ In this mode, dosing functions (for example `manual_dosing` and dosing parameter
 **Note on getReadings format:**
 As of version `0.0.7`, the API client automatically detects and normalizes the payload output from the controller. Whether your Violet Controller returns the classic base-module `dict` structure (`{"PUMPSTATE": "2", "PH": 7.2}`) or the new standalone `list` structure, the `get_readings()` and `get_specific_readings()` functions will always return a seamless, flattened key-value dictionary. Your Home Assistant integration or downstream application will work uniformly with both formats without requiring any extra code!
 
+**Hardware Profile Detection:**
+As of the latest release, the API client provides a method to detect the specific hardware configuration of your Violet Controller.
+```python
+profile = await api.get_hardware_profile()
+print(profile)
+# Output example:
+# {
+#     "base_module": True,
+#     "dosing_module": True,
+#     "extension_module_1": True,
+#     "extension_module_2": False,
+# }
+```
+This detection parses `get_readings()` to check for the presence of certain internal status parameters (`SYSTEM_dosagemodule_cpu_temperature`, `EXT1_1`, `EXT2_1`), allowing your application to dynamically adapt to the connected modules (Base Module, Dosing Module, Relay Extension 1 and 2).
+
 ## License
 GNU Affero General Public License v3.0 or later (AGPLv3+)
 
