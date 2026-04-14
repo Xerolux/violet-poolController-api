@@ -110,6 +110,7 @@ As of version `0.0.7`, the API client automatically detects and normalizes the p
 
 **Hardware Profile Detection:**
 As of the latest release, the API client provides a method to detect the specific hardware configuration of your Violet Controller.
+The API automatically detects the connected modules and updates internal states based on the available readings.
 ```python
 profile = await api.get_hardware_profile()
 print(profile)
@@ -121,7 +122,7 @@ print(profile)
 #     "extension_module_2": False,
 # }
 ```
-This detection parses `get_readings()` to check for the presence of certain internal status parameters (`SYSTEM_dosagemodule_cpu_temperature`, `EXT1_1`, `EXT2_1`), allowing your application to dynamically adapt to the connected modules (Base Module, Dosing Module, Relay Extension 1 and 2).
+This detection parses `get_readings()` to check for the presence of certain internal status parameters (`SYSTEM_dosagemodule_cpu_temperature`, `EXT1_1`, `EXT2_1`), allowing your application to dynamically adapt to the connected modules (Base Module, Dosing Module, Relay Extension 1 and 2). By utilizing this detection, developers and integrations can accurately filter out features for missing hardware, ensuring that only supported options are exposed to the user.
 
 ## License
 GNU Affero General Public License v3.0 or later (AGPLv3+)
