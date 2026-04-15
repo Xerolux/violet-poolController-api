@@ -123,8 +123,10 @@ for ext_bank in [1, 2]:
             f"Erweiterung {ext_bank}.{relay_num}"
         )
 
+DMX_SCENE_COUNT = 12  # Number of DMX scenes supported by the controller
+
 # Dynamically add DMX scenes
-for scene_num in range(1, 13):
+for scene_num in range(1, DMX_SCENE_COUNT + 1):
     SWITCH_FUNCTIONS[f"DMX_SCENE{scene_num}"] = f"DMX Szene {scene_num}"
 
 # Dynamically add digital input rules

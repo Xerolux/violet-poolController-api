@@ -125,6 +125,9 @@ class RateLimiter:
             # Track failures efficiently
             self.blocked_requests += 1
             self._recent_stats["blocked_last_minute"] += 1
+            self.request_history.append(
+                {"time": current_time, "priority": priority, "blocked": True}
+            )
             return False
 
     def _cleanup_history(self, current_time: float) -> None:
