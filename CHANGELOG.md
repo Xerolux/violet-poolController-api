@@ -1,0 +1,164 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## v0.0.10
+
+### Features
+- feat: add hardware profile detection via `get_hardware_profile`
+  Automatically detect the base module, dosing module, and relay extensions based on `get_readings()`.
+
+### Bugfixes
+- fix(github): set git config globally for wiki sync workflow
+
+### Installation
+```bash
+pip install violet-poolController-api==0.0.10
+```
+
+---
+
+## v0.0.9
+
+### Commits since v0.0.8
+
+- 4049429 Update release.yml
+- 446910d chore: bump version to 0.0.9
+- 9a48bbf pypi-environment
+- 73746c2 fix(github): Add environment claim to trusted PyPI publishing workflow
+- d11b9c8 chore: bump version to 0.0.9
+- 628364e fix-auto-detect-dosing-standalone
+- d53a9e0 Merge branch 'main' into fix-auto-detect-dosing-standalone-6258129374762791943
+- 761ae52 fix: resolve PyPI publishing OIDC permission issue
+- 2a18c66 chore: bump version to 0.0.9
+- ff0ea5c fix-auto-detect-dosing-standalone
+- 9876c99 feat: create v0.0.9 release and publish to PyPI
+- be299ad fix-auto-detect-dosing-standalone
+- ac90bfb feat: auto-detect standalone dosing setup from getReadings response
+- 7f8e42f optimize-api
+- 5ae51ea refactor: optimize api components
+
+### Installation
+```bash
+pip install violet-poolController-api==0.0.9
+```
+
+---
+
+## v0.0.8
+
+### Commits since v0.0.6
+
+- ad432c1 fix-pages-and-release-
+- 8c7c358 fix: add missing os import in release workflow
+- 46c43ff fix-pages-and-release
+- b457b5b fix: Update GitHub Pages action versions to correct stable versions
+- fae65eb /jules-fix-pages-and-release
+- 0a3708b chore: fix github pages node warnings and tag release v0.0.7
+- 984f174 0.0.7-standalone-readings
+- 5fabda6 docs: update readme, wiki and changelog for v0.0.7
+
+- Add RELEASE_NOTES_v0.0.7.md with changelog and explanations.
+- Update README.md to explain transparent Standalone payload parsing.
+- Add Standalone description to docs/Fetching-Data.md.
+- 6193cea feat: add standalone getReadings parser and bump version to 0.0.7
+
+- Add support for flattening standalone `getReadings` list payload.
+- Bump package version to 0.0.7 in pyproject.toml and setup.py.
+- Fix Node 20 deprecation warnings in GH Actions.
+- e8577ff feat: add standalone getReadings parser and bump version to 0.0.7
+
+- Add support for flattening standalone `getReadings` list payload.
+- Bump package version to 0.0.7 in pyproject.toml and setup.py.
+- Fix Node 20 deprecation warnings in GH Actions.
+- 38e245c Add files via upload
+
+### Installation
+```bash
+pip install violet-poolController-api==0.0.8
+```
+
+---
+
+## v0.0.7
+
+### Features
+* **Seamless Standalone Firmware Support:** The `getReadings` API responses now automatically parse and flatten the newer, list-based JSON payloads provided by the Violet Standalone controller format. This change is fully backwards-compatible, allowing downstream applications (like Home Assistant) to handle both Base Module and Standalone outputs identically without additional configuration.
+
+### Fixes & Chores
+* **GitHub Actions:** Resolved Node 20 deprecation warnings by forcing actions to run on Node 24 (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`).
+* Bumped project version to `0.0.7` across `pyproject.toml` and `setup.py`.
+
+### Installation
+```bash
+pip install violet-poolController-api==0.0.7
+```
+
+---
+
+## v0.0.6 - Standalone Dosing
+
+### Feature
+
+* Added standalone dosing mode via the new `dosing_standalone` API initialization parameter.
+* In standalone mode, `DOS_*` operations remain available while base-module-dependent functions (for example pump/light/backwash) are blocked.
+
+### Reliability
+
+* Blocked operations now return explicit, user-facing error messages instead of failing implicitly.
+
+### Tests and Documentation
+
+* Added standalone-focused tests for manual dosing behavior and blocked base-module actions.
+* Updated `README.md` and related docs to describe standalone initialization and behavior.
+
+Installation:
+```bash
+pip install violet-poolController-api==0.0.6
+```
+
+---
+
+## v0.0.5 - Bugfix Release
+
+### Bug Fixes
+
+* **Circuit Breaker stale timestamp**: `last_failure_time` used a cached timestamp from before the function call instead of `time.monotonic()` at the actual failure moment. This caused the circuit breaker to transition to HALF_OPEN too early.
+* **4xx errors counted as circuit breaker failures**: HTTP 4xx client errors (400, 404, etc.) incorrectly triggered `VioletPoolAPIError`, which incremented the circuit breaker failure counter. They now raise `ClientResponseError` instead, leaving the circuit breaker unaffected.
+* **Dead code removed**: Unreachable fallback exception in `_request()` replaced with a clearer message.
+* **Missing `DEVICE_PARAMETERS` for ECO and REFILL**: `ECO` and `REFILL` were defined in `SWITCH_FUNCTIONS` but had no corresponding `DEVICE_PARAMETERS` entry, causing `set_switch_state()` to fall back to a generic template.
+
+### Improvements
+
+* CI matrix now tests Python 3.12 and 3.14 via tox.
+* Connect timeout calculation corrected.
+* Removed unnecessary async methods.
+
+Installation:
+```bash
+pip install violet-poolController-api==0.0.5
+```
+
+---
+
+🚀 Initial Release of the Violet Pool Controller API
+
+This is the first official release of the asynchronous Python client for the VIOLET Pool Controller by PoolDigital.
+
+Features included in this release:
+
+* Fully asynchronous operations using aiohttp.
+* Built-in Circuit Breaker and Rate Limiter to protect the controller.
+* Strict payload input sanitization.
+* Support for reading all pool sensors and states.
+* Support for controlling pumps, relays, heating targets, and light scenes (DMX/LED).
+* Support for triggering manual chemical dosing.
+
+Installation:
+```bash
+pip install violet-poolController-api==0.0.2
+```
+
+Note: This API is actively used by the official Violet Home Assistant Integration.
+
+---
