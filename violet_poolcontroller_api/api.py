@@ -53,6 +53,7 @@ from .const_api import (
     API_SET_FUNCTION_MANUALLY,
     API_SET_OUTPUT_TESTMODE,
     API_SET_TARGET_VALUES,
+    DMX_SCENE_COUNT,
     DOSING_FUNCTIONS,
     TARGET_MIN_CHLORINE,
     TARGET_ORP,
@@ -835,7 +836,8 @@ class VioletPoolAPI:
         if not output:
             raise VioletPoolAPIError("Output identifier is required")
 
-        duration_ms = max(0, int(duration)) * 1000
+        safe_duration = max(0, min(86400, int(duration)))  # cap at 24 h
+        duration_ms = safe_duration * 1000
         payload = f"{output},{mode},{duration_ms}"
         body = await self._request(
             API_SET_OUTPUT_TESTMODE,
@@ -941,7 +943,7 @@ class VioletPoolAPI:
             raise VioletPoolAPIError(f"Unsupported DMX action: {action}")
 
         tasks = []
-        for scene in range(1, 13):
+        for scene in range(1, DMX_SCENE_COUNT + 1):
             key = f"DMX_SCENE{scene}"
             tasks.append(self.set_switch_state(key, action))
 
