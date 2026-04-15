@@ -18,8 +18,6 @@
 
 from __future__ import annotations
 
-from .const_devices import DEVICE_PARAMETERS
-
 import asyncio
 import json
 import logging
@@ -61,6 +59,7 @@ from .const_api import (
     TARGET_PH,
 )
 from .circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
+from .const_devices import DEVICE_PARAMETERS
 from .utils_rate_limiter import get_global_rate_limiter
 from .utils_sanitizer import InputSanitizer
 
@@ -497,6 +496,28 @@ class VioletPoolAPI:
 
         return response
 
+    def _build_hardware_profile(self, flattened: dict[str, Any]) -> dict[str, bool]:
+        """Build a hardware presence profile from flattened getReadings data.
+
+        Args:
+            flattened: The flattened key-value readings dict.
+
+        Returns:
+            A dictionary with boolean flags for connected hardware components.
+        """
+        def is_present(key: str) -> bool:
+            if not isinstance(flattened, dict):
+                return False
+            val = flattened.get(key)
+            return val is not None and str(val).strip().upper() != "N/A"
+
+        return {
+            "base_module": not self.dosing_standalone,
+            "dosing_module": self.dosing_standalone or is_present("SYSTEM_dosagemodule_cpu_temperature"),
+            "extension_module_1": is_present("EXT1_1"),
+            "extension_module_2": is_present("EXT2_1"),
+        }
+
     async def get_readings(self) -> dict[str, Any]:
         """Returns the complete dataset from the controller.
 
@@ -512,21 +533,7 @@ class VioletPoolAPI:
             payload_name="getReadings",
         )
         flattened = self._flatten_getreadings_response(response)
-
-        # Determine hardware profile based on the flattened readings
-        def is_present(key: str) -> bool:
-            if not isinstance(flattened, dict):
-                return False
-            val = flattened.get(key)
-            return val is not None and str(val).strip().upper() != "N/A"
-
-        profile = {
-            "base_module": not self.dosing_standalone,
-            "dosing_module": self.dosing_standalone or is_present("SYSTEM_dosagemodule_cpu_temperature"),
-            "extension_module_1": is_present("EXT1_1"),
-            "extension_module_2": is_present("EXT2_1"),
-        }
-
+        profile = self._build_hardware_profile(flattened)
         return self._filter_unsupported_readings(flattened, profile)
 
     def _filter_unsupported_readings(self, readings: dict[str, Any], profile: dict[str, bool]) -> dict[str, Any]:
@@ -635,20 +642,13 @@ class VioletPoolAPI:
             - extension_module_1: True if the first relay extension is present.
             - extension_module_2: True if the second relay extension is present.
         """
-        readings = await self.get_readings()
-
-        def is_present(key: str) -> bool:
-            if not isinstance(readings, dict):
-                return False
-            val = readings.get(key)
-            return val is not None and str(val).strip().upper() != "N/A"
-
-        return {
-            "base_module": not self.dosing_standalone,
-            "dosing_module": self.dosing_standalone or is_present("SYSTEM_dosagemodule_cpu_temperature"),
-            "extension_module_1": is_present("EXT1_1"),
-            "extension_module_2": is_present("EXT2_1"),
-        }
+        response = await self._request_json_dict(
+            API_READINGS,
+            query="ALL",
+            payload_name="getReadings",
+        )
+        flattened = self._flatten_getreadings_response(response)
+        return self._build_hardware_profile(flattened)
 
     async def get_overall_dosing(self) -> dict[str, Any]:
         """Returns aggregated dosing statistics.
