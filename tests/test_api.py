@@ -257,7 +257,7 @@ async def test_dosing_standalone_detection_dict_format(mock_aioresponse, standal
 
 @pytest.mark.asyncio
 async def test_get_hardware_profile(mock_aioresponse, api_client):
-    """Test get_hardware_profile correctly detects components."""
+    """Test get_hardware_profile correctly detects components via alive counters."""
     url = "http://192.168.1.100/getReadings?ALL"
 
     # 1. Base module only (no DOS, EXT)
@@ -270,8 +270,14 @@ async def test_get_hardware_profile(mock_aioresponse, api_client):
         "extension_module_2": False,
     }
 
-    # 2. Base module + Dosing + Ext1
-    mock_aioresponse.get(url, payload={"getReadings": {"PUMPSTATE": "2", "SYSTEM_dosagemodule_cpu_temperature": 45.5, "EXT1_1": "1"}}, status=200)
+    # 2. Base module + Dosing + Ext1 (via alive counters)
+    mock_aioresponse.get(url, payload={"getReadings": {
+        "PUMPSTATE": "2",
+        "SYSTEM_dosagemodule_alive_count": "20392243",
+        "SYSTEM_dosagemodule_cpu_temperature": 45.5,
+        "SYSTEM_ext1module_alive_count": "52443888",
+        "EXT1_1": "1",
+    }}, status=200)
     profile = await api_client.get_hardware_profile()
     assert profile == {
         "base_module": True,
@@ -280,8 +286,14 @@ async def test_get_hardware_profile(mock_aioresponse, api_client):
         "extension_module_2": False,
     }
 
-    # 3. Base module + Ext1 + Ext2 (no Dosing)
-    mock_aioresponse.get(url, payload={"getReadings": {"PUMPSTATE": "2", "EXT1_1": "1", "EXT2_1": "1"}}, status=200)
+    # 3. Base module + Ext1 + Ext2 (via alive counters, no Dosing)
+    mock_aioresponse.get(url, payload={"getReadings": {
+        "PUMPSTATE": "2",
+        "SYSTEM_ext1module_alive_count": "100",
+        "SYSTEM_ext2module_alive_count": "200",
+        "EXT1_1": "1",
+        "EXT2_1": "1",
+    }}, status=200)
     profile = await api_client.get_hardware_profile()
     assert profile == {
         "base_module": True,
@@ -289,6 +301,20 @@ async def test_get_hardware_profile(mock_aioresponse, api_client):
         "extension_module_1": True,
         "extension_module_2": True,
     }
+
+    # 4. Real-world scenario: EXT2 relay data present (value 0) but no ext2 module
+    #    Controller always returns EXT2_* keys even when the module is absent.
+    mock_aioresponse.get(url, payload={"getReadings": {
+        "PUMPSTATE": "2",
+        "SYSTEM_dosagemodule_alive_count": "20392243",
+        "SYSTEM_ext1module_alive_count": "52443888",
+        "EXT1_1": 0, "EXT1_2": 0,
+        "EXT2_1": 0, "EXT2_2": 0,
+        "EXT2_1_LAST_ON": 0, "EXT2_1_LAST_OFF": 0,
+    }}, status=200)
+    profile = await api_client.get_hardware_profile()
+    assert profile["extension_module_1"] is True
+    assert profile["extension_module_2"] is False
 
 @pytest.mark.asyncio
 async def test_get_hardware_profile_standalone_dosing(mock_aioresponse, standalone_api_client):

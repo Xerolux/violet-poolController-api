@@ -500,23 +500,50 @@ class VioletPoolAPI:
     def _build_hardware_profile(self, flattened: dict[str, Any]) -> dict[str, bool]:
         """Build a hardware presence profile from flattened getReadings data.
 
+        Uses the controller's alive-counters (``SYSTEM_*_alive_count``) to
+        reliably detect connected hardware modules.  The controller always
+        emits relay keys (``EXT1_1``, ``EXT2_1``, …) with a default value of
+        ``0`` even when the physical module is absent, so checking those keys
+        would yield false positives.
+
         Args:
             flattened: The flattened key-value readings dict.
 
         Returns:
             A dictionary with boolean flags for connected hardware components.
         """
-        def is_present(key: str) -> bool:
-            if not isinstance(flattened, dict):
+        def _module_alive(alive_key: str) -> bool:
+            val = flattened.get(alive_key)
+            if val is None:
                 return False
-            val = flattened.get(key)
-            return val is not None and str(val).strip().upper() != "N/A"
+            try:
+                return float(str(val).strip()) > 0
+            except (ValueError, TypeError):
+                return False
+
+        def _any_relay_used(prefix: str) -> bool:
+            for key, val in flattened.items():
+                if not key.startswith(prefix):
+                    continue
+                if "_LAST_ON" not in key and "_LAST_OFF" not in key and "_RUNTIME" not in key:
+                    last_on = flattened.get(f"{key}_LAST_ON")
+                    if last_on is not None:
+                        try:
+                            if float(str(last_on).strip()) > 0:
+                                return True
+                        except (ValueError, TypeError):
+                            pass
+            return False
+
+        ext1 = _module_alive("SYSTEM_ext1module_alive_count") or _any_relay_used("EXT1_")
+        ext2 = _module_alive("SYSTEM_ext2module_alive_count") or _any_relay_used("EXT2_")
+        dosing = self.dosing_standalone or _module_alive("SYSTEM_dosagemodule_alive_count")
 
         return {
             "base_module": not self.dosing_standalone,
-            "dosing_module": self.dosing_standalone or is_present("SYSTEM_dosagemodule_cpu_temperature"),
-            "extension_module_1": is_present("EXT1_1"),
-            "extension_module_2": is_present("EXT2_1"),
+            "dosing_module": dosing,
+            "extension_module_1": ext1,
+            "extension_module_2": ext2,
         }
 
     async def get_readings(self) -> dict[str, Any]:

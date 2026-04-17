@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.0.12
+
+### Bugfixes
+- **fix: hardware profile detection no longer reports phantom EXT2 modules.** The controller always returns relay keys (`EXT1_*`, `EXT2_*`) with a default value of `0`, even when the physical module is absent. The old detection checked whether the key existed and was not `"N/A"`, which caused false positives. The new implementation uses the controller's alive counters (`SYSTEM_ext1module_alive_count`, `SYSTEM_ext2module_alive_count`) and falls back to checking for non-zero `_LAST_ON` timestamps on older firmware versions.
+
+### Installation
+```bash
+pip install violet-poolController-api==0.0.12
+```
+
+---
+
 ## v0.0.11
 
 ### Bugfixes
