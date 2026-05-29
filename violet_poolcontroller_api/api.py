@@ -379,11 +379,12 @@ class VioletPoolAPI:
             return body
 
         text = (body or "").strip()
-        success = not text or "error" not in text.lower()
+        lines = text.splitlines() if text else []
+        first_line = lines[0].strip().upper() if lines else ""
+        success = not text or not first_line.startswith("ERROR")
 
         result: dict[str, Any] = {"success": success, "response": text}
 
-        lines = text.splitlines() if text else []
         if len(lines) >= 2:
             result["output"] = lines[1].strip()
         if len(lines) >= 3:
@@ -976,7 +977,7 @@ class VioletPoolAPI:
             raise VioletPoolAPIError(msg)
 
         dos_action = "DOSSTOP" if action.upper() in ("OFF", "STOP") else "DOSSTART"
-        dos_duration = int(duration) if duration else 0
+        dos_duration = round(duration) if duration else 0
 
         form_data = {
             "action": dos_action,
@@ -1244,6 +1245,7 @@ class VioletPoolAPI:
         result = await self._request_json_dict(
             API_GET_CONFIG,
             query=f"{prefix}_use",
+            payload_name="getConfig",
         )
         return bool(int(result.get(f"{prefix}_use", 0)))
 
@@ -1388,13 +1390,13 @@ class VioletPoolAPI:
 
         """
         if page < 0 and log_type == "actions":
-            url = f"{API_GET_LOG}?downloadActionsLog"
+            query = "downloadActionsLog"
         else:
-            url = f"{API_GET_LOG}?{log_type}&{page}"
+            query = f"{log_type}&{page}"
 
-        resp = await self._api_request(
-            "GET",
-            url,
+        resp = await self._request(
+            API_GET_LOG,
+            query=query,
             priority=API_PRIORITY_NORMAL,
         )
         text = resp.strip() if resp else ""
@@ -1414,8 +1416,9 @@ class VioletPoolAPI:
             SENSOR_ID, TYPE, TEXT, MAIL_STATE, etc.
 
         """
-        return await self._api_request(
-            "GET",
-            f"{API_GET_NOTIFICATIONS}?ALL",
+        return await self._request(
+            API_GET_NOTIFICATIONS,
+            query="ALL",
+            expect_json=True,
             priority=API_PRIORITY_NORMAL,
         )

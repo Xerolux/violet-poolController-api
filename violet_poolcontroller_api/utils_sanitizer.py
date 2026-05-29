@@ -131,7 +131,8 @@ class InputSanitizer:
             # Entferne alle Zeichen außer Zahlen, Minus und Punkt
             cleaned = re.sub(r"[^0-9.-]", "", str_value)
 
-            if not cleaned:
+            if not cleaned or not re.match(r"^-?\d*\.?\d+$", cleaned):
+                _LOGGER.warning("Ungültiger numerischer Wert nach Bereinigung: %s", str_value)
                 return 0.0
 
             return float(cleaned)
