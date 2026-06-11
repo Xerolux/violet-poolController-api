@@ -378,12 +378,21 @@ await api.set_pv_surplus(active=False)
 
 - **WICHTIG**: Speed geht in WERT_1 (Position 3), nicht WERT_2
 - **Template**: `PVSURPLUS,{action},{speed},0` (Manual Section 26.3)
+- **Nur ON/OFF**: Die Spezifikation (Manual 26.3) dokumentiert für PVSURPLUS
+  ausschließlich `ON` und `OFF` — ein `AUTO` existiert nicht (getReadings
+  liefert für PVSURPLUS nur die Zustände 0/1/2). Wird `AUTO` an
+  `set_switch_state("PVSURPLUS", ...)` übergeben, sendet die Bibliothek
+  spezifikationskonform `OFF` (mit Warnung im Log); andere Aktionen werfen
+  `VioletPoolAPIError`.
+- **Speed-Bereich**: `pump_speed` wird auf den dokumentierten Bereich 1–3
+  begrenzt. Ohne Angabe übernimmt der Controller die in der GUI
+  konfigurierte Drehzahl.
 - **Parameter**:
 
 | Parameter | Typ | Default | Beschreibung |
 |-----------|-----|---------|-------------|
 | `active` | `bool` | Pflicht | PV-Überschuss aktivieren/deaktivieren |
-| `pump_speed` | `int \| None` | `None` | Pumpenstufe |
+| `pump_speed` | `int \| None` | `None` | Pumpenstufe (1–3) |
 
 ---
 
@@ -697,8 +706,15 @@ state = VioletState(raw_state=2, device_key="PUMP")
 state.mode        # "auto"
 state.is_active   # True
 state.description # "Auto - Active"
-state.display_mode # "Automatik (Aktiv)" (Deutsch)
+state.display_mode # "Automatik (Aktiv)" (Default: Deutsch)
 state.icon        # "mdi:autorenew"
+
+# Sprache der Status-Texte (Default "de", verfügbar: "de", "en"):
+state.display_mode_for("en")            # "Auto (Active)" – einmalig
+VioletState(2, language="en").display_mode  # pro Instanz
+
+from violet_poolcontroller_api import set_state_translation_language
+set_state_translation_language("en")    # global für alle display_mode-Aufrufe
 ```
 
 ### 13.2 State-Mapping (Rohwert → Bedeutung)
