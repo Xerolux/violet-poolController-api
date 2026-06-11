@@ -1235,3 +1235,89 @@ async def test_pump_off_with_duration(
 
     assert result["success"] is True
     assert result["message"] == "MANUELL AUS\n600 Sekunden"
+
+
+@pytest.mark.asyncio
+async def test_pv_surplus_auto_is_mapped_to_off(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """PVSURPLUS supports only ON/OFF (manual 26.3); AUTO is sent as OFF."""
+    url = "http://192.168.1.100/setFunctionManually?PVSURPLUS,OFF,0,0"
+    mock_aioresponse.get(url, body="OK\nPVSURPLUS\nOFF", status=200)
+
+    result = await api_client.set_switch_state("PVSURPLUS", "AUTO")
+
+    assert result["success"] is True
+    assert result["output"] == "PVSURPLUS"
+
+
+@pytest.mark.asyncio
+async def test_pv_surplus_rejects_unknown_action(
+    api_client: VioletPoolAPI,
+) -> None:
+    """PVSURPLUS rejects actions that cannot be mapped to ON/OFF."""
+    with pytest.raises(VioletPoolAPIError, match="manual section 26.3"):
+        await api_client.set_switch_state("PVSURPLUS", "PUSH")
+
+
+@pytest.mark.asyncio
+async def test_pv_surplus_speed_is_clamped(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Pump speed for PVSURPLUS is clamped to the documented 1-3 range."""
+    url = "http://192.168.1.100/setFunctionManually?PVSURPLUS,ON,3,0"
+    mock_aioresponse.get(url, body="OK\nPVSURPLUS\nON", status=200)
+
+    result = await api_client.set_pv_surplus(active=True, pump_speed=5)
+
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_client_error_fails_fast_without_retry(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """A 4xx response raises immediately instead of being retried."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, status=401, body="Unauthorized")
+
+    with pytest.raises(VioletPoolAPIError, match="HTTP 401"):
+        await api_client.get_readings()
+
+
+def test_command_result_error_first_line() -> None:
+    """Line 1 of the response decides success per manual section 26.2."""
+    result = VioletPoolAPI._command_result("ERROR\nPUMP\nUNKNOWN OUTPUT")
+    assert result["success"] is False
+
+    result = VioletPoolAPI._command_result("OK\nPUMP\nInfo about error handling")
+    assert result["success"] is True
+
+
+def test_state_translation_language_switch() -> None:
+    """Display texts are language-configurable instead of hardwired German."""
+    from violet_poolcontroller_api.const_devices import (
+        VioletState,
+        get_state_translation_language,
+        set_state_translation_language,
+    )
+
+    assert get_state_translation_language() == "de"
+    state = VioletState("0")
+    assert state.display_mode == "Automatik (Bereit)"
+    assert state.display_mode_for("en") == "Auto (Ready)"
+
+    english_state = VioletState("0", language="en")
+    assert english_state.display_mode == "Auto (Ready)"
+
+    set_state_translation_language("en")
+    try:
+        assert VioletState("4").display_mode == "Manual On"
+    finally:
+        set_state_translation_language("de")
+
+    with pytest.raises(ValueError, match="Unsupported language"):
+        set_state_translation_language("fr")

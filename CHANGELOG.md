@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixes
+- **fix: broken lint/typing configuration** — `tool.ruff.target-version` and `tool.mypy.python_version` contained the package version (`0.0.26`) instead of a Python version, which made `ruff` (and the `tox -e lint` CI job) fail to parse `pyproject.toml`
+- **fix: PVSURPLUS made spec-conform** — manual section 26.3 only documents `ON`/`OFF` for PVSURPLUS (no `AUTO`; getReadings reports only states 0/1/2). `set_switch_state("PVSURPLUS", "AUTO")` now sends `OFF` (with a warning) instead of the undocumented `PVSURPLUS,AUTO`, other unsupported actions raise `VioletPoolAPIError`; `set_pv_surplus()` clamps `pump_speed` to the documented 1–3 range
+- **fix: 4xx responses fail fast** — deterministic client errors (401/404, except 429) are no longer retried with backoff
+- **fix: `_command_result()` evaluates line 1 (`OK`/`ERROR`) per manual section 26.2** — info texts that merely contain the word "error" no longer flip `success` to `False`
+- **fix: `tests/test_mock_server.py` now starts the mock server via a pytest fixture** — `pytest tests/` passes standalone again
+
+### Improvements
+- **feat: state display texts are language-configurable** — `VioletState.display_mode` was hardwired to German; the default stays `"de"` for backwards compatibility, but the language can now be set per instance (`VioletState(..., language="en")`), per call (`display_mode_for("en")`), or globally (`set_state_translation_language("en")`). `STATE_TRANSLATIONS`, `get_state_translation_language` and `set_state_translation_language` are exported from the package root
+
+---
+
 ## v0.0.25
 
 ### Improvements
