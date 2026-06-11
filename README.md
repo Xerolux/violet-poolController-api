@@ -1,5 +1,16 @@
 # Violet Pool Controller API
 
+> **This repository has been archived and merged into the [violet-hass monorepo](https://github.com/Xerolux/violet-hass).**
+>
+> All development continues at [`violet_poolcontroller_api/`](https://github.com/Xerolux/violet-hass/tree/main/violet_poolcontroller_api).
+> The PyPI package [`violet-poolController-api`](https://pypi.org/project/violet-poolController-api/) will continue to be published from the monorepo.
+>
+> - **New repo:** https://github.com/Xerolux/violet-hass
+> - **API source:** https://github.com/Xerolux/violet-hass/tree/main/violet_poolcontroller_api
+> - **Issues:** https://github.com/Xerolux/violet-hass/issues
+
+---
+
 [![PyPI version](https://img.shields.io/pypi/v/violet-poolController-api.svg?style=for-the-badge)](https://pypi.org/project/violet-poolController-api/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/violet-poolController-api.svg?style=for-the-badge)](https://pypistats.org/packages/violet-poolcontroller-api)
 [![Python versions](https://img.shields.io/pypi/pyversions/violet-poolController-api.svg?style=for-the-badge)](https://pypi.org/project/violet-poolController-api/)
