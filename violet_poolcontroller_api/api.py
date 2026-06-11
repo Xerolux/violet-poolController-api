@@ -87,6 +87,18 @@ class VioletPoolAPIError(Exception):
     """Raised when the Violet Pool Controller API returns an error."""
 
 
+class _DeterministicClientError(Exception):
+    """Internal marker for 4xx client errors.
+
+    Deliberately inherits from neither VioletPoolAPIError nor
+    aiohttp.ClientError so it bypasses both the retry loop and the
+    circuit breaker failure count: 4xx responses are deterministic
+    (bad credentials, unknown endpoint) and must not open the breaker
+    that protects against a down controller or network.  It is
+    translated to VioletPoolAPIError before reaching the caller.
+    """
+
+
 class VioletPoolAPI:
     """A small HTTP client for interacting with the Violet Pool Controller.
 
@@ -156,7 +168,10 @@ class VioletPoolAPI:
 
         # Rate limiting to protect the controller from being overloaded
         self._rate_limiter = get_global_rate_limiter()
-        self._circuit_breaker = CircuitBreaker(expected_exception=VioletPoolAPIError)
+        self._circuit_breaker = CircuitBreaker(
+            expected_exception=VioletPoolAPIError,
+            ignored_exceptions=(_DeterministicClientError,),
+        )
         _LOGGER.debug(
             "API initialized with rate limiting enabled, SSL=%s, verify_ssl=%s",
             use_ssl,
@@ -321,7 +336,7 @@ class VioletPoolAPI:
                             # deterministic - fail fast instead of retrying.
                             body = await response.text()
                             msg = f"HTTP {response.status} for {endpoint}: {body.strip()}"
-                            raise VioletPoolAPIError(msg)
+                            raise _DeterministicClientError(msg)
 
                         if expect_json:
                             try:
@@ -359,6 +374,8 @@ class VioletPoolAPI:
 
         try:
             return await self._circuit_breaker.call(_execute_request)
+        except _DeterministicClientError as err:
+            raise VioletPoolAPIError(str(err)) from err
         except CircuitBreakerOpenError as err:
             msg = "Circuit breaker is open due to repeated communication failures"
             raise VioletPoolAPIError(

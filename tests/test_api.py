@@ -1288,6 +1288,41 @@ async def test_client_error_fails_fast_without_retry(
         await api_client.get_readings()
 
 
+@pytest.mark.asyncio
+async def test_client_error_does_not_trip_circuit_breaker(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Deterministic 4xx errors must not count as circuit breaker failures."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    threshold = api_client._circuit_breaker.failure_threshold
+
+    for _ in range(threshold + 1):
+        mock_aioresponse.get(url, status=401, body="Unauthorized")
+        with pytest.raises(VioletPoolAPIError, match="HTTP 401"):
+            await api_client.get_readings()
+
+    stats = api_client._circuit_breaker.get_stats()
+    assert stats["failure_count"] == 0
+    assert stats["state"] == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_server_error_still_counts_for_circuit_breaker(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """5xx errors keep counting as circuit breaker failures."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, status=500, body="boom")
+
+    with pytest.raises(VioletPoolAPIError):
+        await api_client.get_readings()
+
+    stats = api_client._circuit_breaker.get_stats()
+    assert stats["failure_count"] == 1
+
+
 def test_command_result_error_first_line() -> None:
     """Line 1 of the response decides success per manual section 26.2."""
     result = VioletPoolAPI._command_result("ERROR\nPUMP\nUNKNOWN OUTPUT")
