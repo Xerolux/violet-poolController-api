@@ -26,6 +26,7 @@ import aiohttp
 import pytest
 import pytest_asyncio
 from aioresponses import aioresponses
+from yarl import URL
 
 from violet_poolcontroller_api.api import VioletPoolAPI, VioletPoolAPIError
 from violet_poolcontroller_api.circuit_breaker import CircuitBreakerOpenError
@@ -1177,6 +1178,35 @@ async def test_manual_dosing_stop(
 
     assert result["success"] is True
     assert "MANDOS_STOPPED" in result["response"]
+
+
+@pytest.mark.asyncio
+async def test_dosing_auto_action_sends_dosstop(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """AUTO on a dosing output must stop the run, never start one.
+
+    setFunctionManually does not work for DOS_* outputs (PoolDigital forum),
+    so AUTO maps to DOSSTOP via /triggerManualDosing - stopping the manual
+    run returns the channel to automatic mode.
+    """
+    url = "http://192.168.1.100/triggerManualDosing"
+    mock_aioresponse.post(url, body="MANDOS_STOPPED\nOK", status=200)
+
+    result = await api_client.set_switch_state("DOS_6_FLOC", "AUTO")
+
+    assert result["success"] is True
+    request_key = ("POST", URL(url))
+    sent = mock_aioresponse.requests[request_key][0].kwargs["data"]
+    assert sent["action"] == "DOSSTOP"
+
+
+@pytest.mark.asyncio
+async def test_dosing_unknown_action_rejected(api_client: VioletPoolAPI) -> None:
+    """Unknown dosing actions raise instead of defaulting to DOSSTART."""
+    with pytest.raises(VioletPoolAPIError, match="Unsupported dosing action"):
+        await api_client.set_switch_state("DOS_1_CL", "PUSH")
 
 
 @pytest.mark.asyncio

@@ -993,16 +993,22 @@ class VioletPoolAPI:
     ) -> dict[str, Any]:
         """Trigger or stop a manual dosing run via /triggerManualDosing.
 
+        setFunctionManually does not work for dosing outputs (confirmed by
+        PoolDigital in the support forum): neither ON nor AUTO has any
+        effect there. Starting AND stopping a manual dosing run must both
+        go through /triggerManualDosing.
+
         Args:
             key: The dosing pump key (e.g. DOS_6_FLOC).
-            action: The action (ON/START → DOSSTART, OFF/STOP → DOSSTOP).
+            action: ON/START → DOSSTART; OFF/STOP/AUTO → DOSSTOP
+                (stopping a run returns the channel to automatic mode).
             duration: Duration in seconds.
 
         Returns:
             A dictionary with the command result.
 
         Raises:
-            VioletPoolAPIError: If the dosing key is unknown.
+            VioletPoolAPIError: If the dosing key or action is unknown.
 
         """
         output_index = DOSING_OUTPUT_INDEX.get(key)
@@ -1010,7 +1016,17 @@ class VioletPoolAPI:
             msg = f"Unknown dosing output key: {key}"
             raise VioletPoolAPIError(msg)
 
-        dos_action = "DOSSTOP" if action.upper() in ("OFF", "STOP") else "DOSSTART"
+        action_upper = action.strip().upper()
+        if action_upper in ("OFF", "STOP", "AUTO", "DOSSTOP"):
+            dos_action = "DOSSTOP"
+        elif action_upper in ("ON", "START", "DOSSTART"):
+            dos_action = "DOSSTART"
+        else:
+            # Never default to DOSSTART: an unexpected action must not
+            # start a chemical dosing run.
+            msg = f"Unsupported dosing action for {key}: {action}"
+            raise VioletPoolAPIError(msg)
+
         dos_duration = int(duration) if duration else 0
 
         form_data = {

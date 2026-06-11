@@ -59,6 +59,11 @@ DEVICE_PARAMETERS: dict[str, dict[str, Any]] = {
         "supports_color_pulse": True,
         "api_template": "LIGHT,{action},0,0",
     },
+    # NOTE: The api_template entries for DOS_* are NOT usable with
+    # /setFunctionManually - the controller rejects dosing outputs there
+    # (confirmed by PoolDigital). VioletPoolAPI.set_switch_state() routes
+    # all DOS_* keys to POST /triggerManualDosing instead; the templates
+    # remain only for backwards compatibility of this public constant.
     "DOS_1_CL": {
         "supports_timer": True,
         "dosing_type": "Chlor",
