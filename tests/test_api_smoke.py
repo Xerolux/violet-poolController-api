@@ -28,6 +28,8 @@ from violet_poolcontroller_api.api import VioletPoolAPI, VioletPoolAPIError
 
 @dataclasses.dataclass
 class TestResult:
+    __test__ = False  # not a pytest test class; silences collection warning
+
     name: str
     status: str  # "PASS" | "FAIL" | "SKIP"
     detail: str = ""

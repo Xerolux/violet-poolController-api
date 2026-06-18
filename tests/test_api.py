@@ -1,4 +1,4 @@
-# violet-poolController-api - API für Violet Pool Controller
+# violet-poolController-api - API f├╝r Violet Pool Controller
 # Copyright (C) 2024-2026  Xerolux
 #
 # This program is free software: you can redistribute it and/or modify
@@ -20,12 +20,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Never
 
 import aiohttp
 import pytest
 import pytest_asyncio
 from aioresponses import aioresponses
+from yarl import URL
 
 from violet_poolcontroller_api.api import VioletPoolAPI, VioletPoolAPIError
 from violet_poolcontroller_api.circuit_breaker import CircuitBreakerOpenError
@@ -33,6 +35,7 @@ from violet_poolcontroller_api.const_api import (
     ERROR_CODES,
     ERROR_SEVERITY_ALARM,
     ERROR_SEVERITY_INFO,
+    ERROR_SEVERITY_REMINDER,
     ERROR_SEVERITY_WARNING,
 )
 
@@ -89,8 +92,8 @@ async def test_get_readings_success(
 
     result = await api_client.get_readings()
 
-    assert isinstance(result, dict)
-    assert result == mock_data
+    assert isinstance(result, Mapping)
+    assert dict(result) == mock_data
 
 
 @pytest.mark.asyncio
@@ -288,8 +291,8 @@ async def test_get_readings_standalone_list_format(
 
     result = await api_client.get_readings()
 
-    assert isinstance(result, dict)
-    assert result == {"date": "12.04.2023", "CPU_TEMP": 45.5}
+    assert isinstance(result, Mapping)
+    assert dict(result) == {"date": "12.04.2023", "CPU_TEMP": 45.5}
     assert api_client.dosing_standalone is True
 
 
@@ -312,7 +315,7 @@ async def test_dosing_standalone_detection_dict_format(
 
     result = await standalone_api_client.get_readings()
 
-    assert isinstance(result, dict)
+    assert isinstance(result, Mapping)
     assert standalone_api_client.dosing_standalone is False
 
 
@@ -483,7 +486,7 @@ async def test_ext1_readings_filtered_when_not_detected(mock_aioresponse, api_cl
         payload={
             "getReadings": {
                 "PUMPSTATE": "2",
-                # No SYSTEM_ext1module_alive_count → module not connected
+                # No SYSTEM_ext1module_alive_count ÔåÆ module not connected
                 "EXT1_1": 0,
                 "EXT1_2": 0,
             }
@@ -869,6 +872,324 @@ async def test_set_dosing_parameters(
 
 
 @pytest.mark.asyncio
+async def test_reset_blocking(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test reset_blocking clears fault blockings via GET /resetBlocking."""
+    url = "http://192.168.1.100/resetBlocking"
+    mock_aioresponse.get(url, body="OK\nBLOCKINGS_CLEARED", status=200)
+
+    result = await api_client.reset_blocking()
+
+    assert result["success"] is True
+    assert "BLOCKINGS_CLEARED" in result["response"]
+
+
+@pytest.mark.asyncio
+async def test_set_can_amount_adjust(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_can_amount (ADJUST) updates canister level via POST."""
+    url = "http://192.168.1.100/setCanAmount"
+    mock_aioresponse.post(url, body="OK\nDOS_1_CL\n25000", status=200)
+
+    result = await api_client.set_can_amount("DOS_1_CL", 25000)
+
+    assert result["success"] is True
+    # Verify form payload sent to the controller
+    sent = list(mock_aioresponse.requests.values())[0][0].kwargs["data"]
+    assert sent["action"] == "ADJUST"
+    assert sent["which"] == "DOS_1_CL"
+    assert sent["amount"] == "25000"
+    assert sent["cid"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_set_can_amount_reset(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_can_amount(reset=True) sends RESET action."""
+    url = "http://192.168.1.100/setCanAmount"
+    mock_aioresponse.post(url, body="OK", status=200)
+
+    result = await api_client.set_can_amount("DOS_6_FLOC", 20000, reset=True)
+
+    assert result["success"] is True
+    sent = list(mock_aioresponse.requests.values())[0][0].kwargs["data"]
+    assert sent["action"] == "RESET"
+    assert sent["cid"] == "6"
+
+
+@pytest.mark.asyncio
+async def test_set_can_amount_rejects_unknown_key(
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_can_amount raises on unknown dosing key."""
+    with pytest.raises(VioletPoolAPIError, match="Unknown dosing key"):
+        await api_client.set_can_amount("DOS_99_XXX", 1000)
+
+
+@pytest.mark.asyncio
+async def test_set_can_amount_rejects_nonpositive_amount(
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_can_amount rejects zero/negative fill levels."""
+    with pytest.raises(ValueError, match="must be > 0"):
+        await api_client.set_can_amount("DOS_1_CL", 0)
+    with pytest.raises(ValueError, match="must be > 0"):
+        await api_client.set_can_amount("DOS_1_CL", -100)
+
+
+@pytest.mark.asyncio
+async def test_set_system_service_enable(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_system_service(enabled=True) hits the /enableFTP endpoint."""
+    url = "http://192.168.1.100/enableFTP"
+    mock_aioresponse.get(url, body="OK\nenableFTP", status=200)
+
+    result = await api_client.set_system_service("ftp", enabled=True)
+
+    assert result["success"] is True
+    sent_key = list(mock_aioresponse.requests.keys())[0]
+    assert str(sent_key[1]).endswith("/enableFTP")
+
+
+@pytest.mark.asyncio
+async def test_set_system_service_disable(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_system_service(enabled=False) hits /disableSSH."""
+    url = "http://192.168.1.100/disableSSH"
+    mock_aioresponse.get(url, body="OK", status=200)
+
+    result = await api_client.set_system_service("ssh", enabled=False)
+
+    assert result["success"] is True
+    sent_key = list(mock_aioresponse.requests.keys())[0]
+    assert str(sent_key[1]).endswith("/disableSSH")
+
+
+@pytest.mark.asyncio
+async def test_set_system_service_rejects_unknown(
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_system_service raises on unknown service name."""
+    with pytest.raises(VioletPoolAPIError, match="Unknown system service"):
+        await api_client.set_system_service("telnet", enabled=True)
+
+
+@pytest.mark.asyncio
+async def test_get_system_services(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test get_system_services normalises raw getServiceStates response."""
+    url = "http://192.168.1.100/getServiceStates"
+    mock_aioresponse.get(
+        url,
+        payload={
+            "proftpd": 0,
+            "shairport": 1,
+            "samba": 0,
+            "sshd": 1,
+            "homekit": 0,
+            "tunnel_state": 1,
+            "support_tunnel_state": 0,
+            "date": "29.02.2024",
+            "time": "19:50:02",
+        },
+        status=200,
+    )
+
+    result = await api_client.get_system_services()
+
+    # Alexa has no state_key and must be absent.
+    assert "alexa" not in result
+    assert result == {
+        "ftp": False,
+        "shairport": True,
+        "samba": False,
+        "ssh": True,
+        "homebridge": False,
+        "tunnel": True,
+        "support_tunnel": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# OmniTronic + RS485 + LiveTrace (P12 / P13 / P15)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_omni_position(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_omni_position sends OMNI,OMNI_DC<N> via setFunctionManually."""
+    url = "http://192.168.1.100/setFunctionManually?OMNI,OMNI_DC2,0,0"
+    mock_aioresponse.get(url, body="OK\nOMNITRONIC\nOMNI_DC2\n", status=200)
+
+    result = await api_client.set_omni_position(2)
+
+    # The mock only matches the exact URL we registered, so a True result
+    # proves the right URL was hit (aioresponses returns 404 otherwise).
+    assert result["success"] is True
+    assert "OMNITRONIC" in result["response"]
+    # One request must have been recorded.
+    assert len(list(mock_aioresponse.requests.values())) == 1
+
+
+@pytest.mark.asyncio
+async def test_set_omni_position_filtration(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Position 0 (Filtration) is valid and maps to OMNI_DC0."""
+    url = "http://192.168.1.100/setFunctionManually?OMNI,OMNI_DC0,0,0"
+    mock_aioresponse.get(url, body="OK\nOMNITRONIC\nOMNI_DC0\n", status=200)
+
+    result = await api_client.set_omni_position(0)
+
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_omni_position_rejects_out_of_range(
+    api_client: VioletPoolAPI,
+) -> None:
+    """Positions outside 0-5 are rejected before the request is sent."""
+    with pytest.raises(VioletPoolAPIError, match="Invalid OmniTronic position"):
+        await api_client.set_omni_position(6)
+    with pytest.raises(VioletPoolAPIError, match="Invalid OmniTronic position"):
+        await api_client.set_omni_position(-1)
+
+
+@pytest.mark.asyncio
+async def test_get_rs485_pump_data(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test get_rs485_pump_data returns the pump's JSON config + live values."""
+    url = "http://192.168.1.100/getRS485PumpData?BADU_ECO_DRIVE_II"
+    mock_aioresponse.get(
+        url,
+        payload={
+            "BRAND": "BADU",
+            "NAME": "Eco Drive II",
+            "pump_rs485_pwr": 450,
+            "SLAVE_PRESENT": "YES",
+        },
+        status=200,
+    )
+
+    result = await api_client.get_rs485_pump_data("BADU_ECO_DRIVE_II")
+
+    assert result["BRAND"] == "BADU"
+    assert result["pump_rs485_pwr"] == 450
+    assert result["SLAVE_PRESENT"] == "YES"
+
+
+@pytest.mark.asyncio
+async def test_get_rs485_pump_data_rejects_unknown_pump(
+    api_client: VioletPoolAPI,
+) -> None:
+    with pytest.raises(VioletPoolAPIError, match="Unknown RS485 pump name"):
+        await api_client.get_rs485_pump_data("PENTAIR_VSF")
+
+
+@pytest.mark.asyncio
+async def test_set_rs485_live(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test set_rs485_live forwards mode+level to the pump's modbus."""
+    url = "http://192.168.1.100/setRS485Live?BADU_ECO_DRIVE_II,1,hz,45"
+    mock_aioresponse.get(url, body='"1|0,0|2,4500"', status=200)
+
+    result = await api_client.set_rs485_live(
+        "BADU_ECO_DRIVE_II", slave_id=1, mode="hz", level=45
+    )
+
+    assert "1|0,0|2,4500" in result
+
+
+@pytest.mark.asyncio
+async def test_set_rs485_live_rejects_bad_mode(
+    api_client: VioletPoolAPI,
+) -> None:
+    with pytest.raises(VioletPoolAPIError, match="Invalid RS485 mode"):
+        await api_client.set_rs485_live(
+            "BADU_ECO_DRIVE_II", slave_id=1, mode="percent", level=50
+        )
+
+
+@pytest.mark.asyncio
+async def test_set_rs485_live_rejects_bad_slave_id(
+    api_client: VioletPoolAPI,
+) -> None:
+    with pytest.raises(ValueError, match="slave_id must be 1-247"):
+        await api_client.set_rs485_live(
+            "BADU_ECO_DRIVE_II", slave_id=0, mode="hz", level=45
+        )
+
+
+@pytest.mark.asyncio
+async def test_end_rs485_live(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test end_rs485_live sends the DONE sentinel."""
+    url = "http://192.168.1.100/setRS485Live?DONE"
+    mock_aioresponse.get(url, body='"DONE"', status=200)
+
+    result = await api_client.end_rs485_live()
+
+    assert result == "DONE"
+
+
+@pytest.mark.asyncio
+async def test_get_live_trace(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Test get_live_trace parses the 3-line CSV into a dict."""
+    url = "http://192.168.1.100/getLiveTrace"
+    csv_body = (
+        "epoch;date;time;onewire1_value;pH_value;PUMP\n"
+        "ms;;;°C;;\n"
+        "1709234445000;29.02.2024;19:50:02;7,30;7,3;1\n"
+    )
+    mock_aioresponse.get(url, body=csv_body, status=200)
+
+    result = await api_client.get_live_trace()
+
+    assert result["onewire1_value"] == "7.30"  # German comma → dot
+    assert result["pH_value"] == "7.3"
+    assert result["PUMP"] == "1"
+    assert result["date"] == "29.02.2024"
+
+
+@pytest.mark.asyncio
+async def test_get_live_trace_malformed(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Malformed payloads (fewer than 3 lines) raise VioletPoolAPIError."""
+    url = "http://192.168.1.100/getLiveTrace"
+    mock_aioresponse.get(url, body="only_one_line", status=200)
+
+    with pytest.raises(VioletPoolAPIError, match="Malformed getLiveTrace"):
+        await api_client.get_live_trace()
+
+
+@pytest.mark.asyncio
 async def test_control_pump(
     mock_aioresponse: aioresponses,
     api_client: VioletPoolAPI,
@@ -983,6 +1304,7 @@ def test_error_codes_structure() -> None:
             ERROR_SEVERITY_ALARM,
             ERROR_SEVERITY_WARNING,
             ERROR_SEVERITY_INFO,
+            ERROR_SEVERITY_REMINDER,
         ), f"Code {code} has invalid severity: {info['severity']}"
 
 
@@ -1009,6 +1331,35 @@ def test_error_codes_hardware_modules() -> None:
     assert ERROR_CODES["0200"]["severity"] == ERROR_SEVERITY_WARNING
     assert ERROR_CODES["0208"]["severity"] == ERROR_SEVERITY_ALARM
     assert ERROR_CODES["0209"]["severity"] == ERROR_SEVERITY_ALARM
+
+
+def test_error_codes_omnitronic_faults_added() -> None:
+    """OmniTronic multi-port valve faults (0045/46/47/49) are present as ALARM."""
+    # Regression test for missing backwash-valve codes – see CLAUDE.md notes.
+    for code in ("0045", "0046", "0047", "0049"):
+        assert code in ERROR_CODES, f"Missing OmniTronic code {code}"
+        assert ERROR_CODES[code]["severity"] == ERROR_SEVERITY_ALARM
+
+
+def test_error_codes_h2o2_dosing_added() -> None:
+    """H2O2 dosing warnings (0142-0145) are present."""
+    for code in ("0142", "0143", "0144", "0145"):
+        assert code in ERROR_CODES, f"Missing H2O2 code {code}"
+        assert ERROR_CODES[code]["severity"] == ERROR_SEVERITY_WARNING
+
+
+def test_error_codes_reminder_category() -> None:
+    """REMINDER-category codes are classified correctly (not INFO)."""
+    # 0003 birthday, 0005 system status, 0010-0012 updates, 0180-0182 calibration.
+    for code in ("0003", "0005", "0010", "0011", "0012", "0180", "0181", "0182"):
+        assert ERROR_CODES[code]["severity"] == ERROR_SEVERITY_REMINDER, code
+
+
+def test_error_code_0005_text_corrected() -> None:
+    """Code 0005 is the generic system-status reminder, not cloud maintenance."""
+    # Regression: previously held wrong text "Wartungsarbeiten am Cloud-Server".
+    assert "Cloud-Server" not in ERROR_CODES["0005"]["message"]
+    assert ERROR_CODES["0005"]["message"] == "Systemnachricht"
 
 
 def test_error_codes_four_digit_format() -> None:
@@ -1180,6 +1531,35 @@ async def test_manual_dosing_stop(
 
 
 @pytest.mark.asyncio
+async def test_dosing_auto_action_sends_dosstop(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """AUTO on a dosing output must stop the run, never start one.
+
+    setFunctionManually does not work for DOS_* outputs (PoolDigital forum),
+    so AUTO maps to DOSSTOP via /triggerManualDosing - stopping the manual
+    run returns the channel to automatic mode.
+    """
+    url = "http://192.168.1.100/triggerManualDosing"
+    mock_aioresponse.post(url, body="MANDOS_STOPPED\nOK", status=200)
+
+    result = await api_client.set_switch_state("DOS_6_FLOC", "AUTO")
+
+    assert result["success"] is True
+    request_key = ("POST", URL(url))
+    sent = mock_aioresponse.requests[request_key][0].kwargs["data"]
+    assert sent["action"] == "DOSSTOP"
+
+
+@pytest.mark.asyncio
+async def test_dosing_unknown_action_rejected(api_client: VioletPoolAPI) -> None:
+    """Unknown dosing actions raise instead of defaulting to DOSSTART."""
+    with pytest.raises(VioletPoolAPIError, match="Unsupported dosing action"):
+        await api_client.set_switch_state("DOS_1_CL", "PUSH")
+
+
+@pytest.mark.asyncio
 async def test_pv_surplus_with_speed(
     mock_aioresponse: aioresponses,
     api_client: VioletPoolAPI,
@@ -1235,3 +1615,124 @@ async def test_pump_off_with_duration(
 
     assert result["success"] is True
     assert result["message"] == "MANUELL AUS\n600 Sekunden"
+
+
+@pytest.mark.asyncio
+async def test_pv_surplus_auto_is_mapped_to_off(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """PVSURPLUS supports only ON/OFF (manual 26.3); AUTO is sent as OFF."""
+    url = "http://192.168.1.100/setFunctionManually?PVSURPLUS,OFF,0,0"
+    mock_aioresponse.get(url, body="OK\nPVSURPLUS\nOFF", status=200)
+
+    result = await api_client.set_switch_state("PVSURPLUS", "AUTO")
+
+    assert result["success"] is True
+    assert result["output"] == "PVSURPLUS"
+
+
+@pytest.mark.asyncio
+async def test_pv_surplus_rejects_unknown_action(
+    api_client: VioletPoolAPI,
+) -> None:
+    """PVSURPLUS rejects actions that cannot be mapped to ON/OFF."""
+    with pytest.raises(VioletPoolAPIError, match="manual section 26.3"):
+        await api_client.set_switch_state("PVSURPLUS", "PUSH")
+
+
+@pytest.mark.asyncio
+async def test_pv_surplus_speed_is_clamped(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Pump speed for PVSURPLUS is clamped to the documented 1-3 range."""
+    url = "http://192.168.1.100/setFunctionManually?PVSURPLUS,ON,3,0"
+    mock_aioresponse.get(url, body="OK\nPVSURPLUS\nON", status=200)
+
+    result = await api_client.set_pv_surplus(active=True, pump_speed=5)
+
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_client_error_fails_fast_without_retry(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """A 4xx response raises immediately instead of being retried."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, status=401, body="Unauthorized")
+
+    with pytest.raises(VioletPoolAPIError, match="HTTP 401"):
+        await api_client.get_readings()
+
+
+@pytest.mark.asyncio
+async def test_client_error_does_not_trip_circuit_breaker(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Deterministic 4xx errors must not count as circuit breaker failures."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    threshold = api_client._circuit_breaker.failure_threshold
+
+    for _ in range(threshold + 1):
+        mock_aioresponse.get(url, status=401, body="Unauthorized")
+        with pytest.raises(VioletPoolAPIError, match="HTTP 401"):
+            await api_client.get_readings()
+
+    stats = api_client._circuit_breaker.get_stats()
+    assert stats["failure_count"] == 0
+    assert stats["state"] == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_server_error_still_counts_for_circuit_breaker(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """5xx errors keep counting as circuit breaker failures."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, status=500, body="boom")
+
+    with pytest.raises(VioletPoolAPIError):
+        await api_client.get_readings()
+
+    stats = api_client._circuit_breaker.get_stats()
+    assert stats["failure_count"] == 1
+
+
+def test_command_result_error_first_line() -> None:
+    """Line 1 of the response decides success per manual section 26.2."""
+    result = VioletPoolAPI._command_result("ERROR\nPUMP\nUNKNOWN OUTPUT")
+    assert result["success"] is False
+
+    result = VioletPoolAPI._command_result("OK\nPUMP\nInfo about error handling")
+    assert result["success"] is True
+
+
+def test_state_translation_language_switch() -> None:
+    """Display texts are language-configurable instead of hardwired German."""
+    from violet_poolcontroller_api.const_devices import (
+        VioletState,
+        get_state_translation_language,
+        set_state_translation_language,
+    )
+
+    assert get_state_translation_language() == "de"
+    state = VioletState("0")
+    assert state.display_mode == "Automatik (Bereit)"
+    assert state.display_mode_for("en") == "Auto (Ready)"
+
+    english_state = VioletState("0", language="en")
+    assert english_state.display_mode == "Auto (Ready)"
+
+    set_state_translation_language("en")
+    try:
+        assert VioletState("4").display_mode == "Manual On"
+    finally:
+        set_state_translation_language("de")
+
+    with pytest.raises(ValueError, match="Unsupported language"):
+        set_state_translation_language("fr")

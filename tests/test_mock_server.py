@@ -7,11 +7,15 @@ credentials, and verifies that authentication is enforced properly.
 from __future__ import annotations
 
 import asyncio
+import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
+from pathlib import Path
 
 import aiohttp
+import pytest
 
 from violet_poolcontroller_api.api import VioletPoolAPI, VioletPoolAPIError
 
@@ -19,6 +23,50 @@ HOST = "localhost"
 PORT = 8499
 USER = "admin"
 PASS = "secret"
+
+_MOCK_SERVER_PATH = Path(__file__).parent / "mock_server.py"
+
+
+def _start_mock_server() -> subprocess.Popen[bytes]:
+    """Start the mock server subprocess and wait until it accepts connections."""
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(_MOCK_SERVER_PATH),
+            "--port",
+            str(PORT),
+            "--user",
+            USER,
+            "--password",
+            PASS,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            msg = f"Mock server exited early with code {proc.returncode}"
+            raise RuntimeError(msg)
+        try:
+            with socket.create_connection((HOST, PORT), timeout=0.5):
+                return proc
+        except OSError:
+            time.sleep(0.1)
+    proc.terminate()
+    msg = f"Mock server did not start listening on port {PORT} within 10s"
+    raise RuntimeError(msg)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def mock_server() -> Iterator[subprocess.Popen[bytes]]:
+    """Run the mock server for all tests in this module."""
+    proc = _start_mock_server()
+    try:
+        yield proc
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
 
 
 async def _request(url: str, auth: aiohttp.BasicAuth | None = None) -> tuple[int, str]:
@@ -29,18 +77,26 @@ async def _request(url: str, auth: aiohttp.BasicAuth | None = None) -> tuple[int
 
 async def test_raw_auth() -> None:
     print("=" * 60)
-    print("TEST 1: Raw HTTP - no credentials -> 401")
+    print("TEST 1: Raw HTTP - /getReadings without credentials -> 200")
     print("=" * 60)
     status, body = await _request(f"http://{HOST}:{PORT}/getReadings?ALL")
+    assert status == 200, f"Expected 200, got {status}"
+    print(f"  OK: status={status} body_len={len(body)}")
+
+    print()
+    print("=" * 60)
+    print("TEST 2: Raw HTTP - /getConfig without credentials -> 401")
+    print("=" * 60)
+    status, body = await _request(f"http://{HOST}:{PORT}/getConfig")
     assert status == 401, f"Expected 401, got {status}"
     print(f"  OK: status={status} body={body!r}")
 
     print()
     print("=" * 60)
-    print("TEST 2: Raw HTTP - wrong password -> 401")
+    print("TEST 3: Raw HTTP - /getConfig with wrong password -> 401")
     print("=" * 60)
     status, body = await _request(
-        f"http://{HOST}:{PORT}/getReadings?ALL",
+        f"http://{HOST}:{PORT}/getConfig",
         auth=aiohttp.BasicAuth("admin", "wrongpassword"),
     )
     assert status == 401, f"Expected 401, got {status}"
@@ -48,10 +104,10 @@ async def test_raw_auth() -> None:
 
     print()
     print("=" * 60)
-    print("TEST 3: Raw HTTP - correct credentials -> 200")
+    print("TEST 4: Raw HTTP - /getConfig with correct credentials -> 200")
     print("=" * 60)
     status, body = await _request(
-        f"http://{HOST}:{PORT}/getReadings?ALL",
+        f"http://{HOST}:{PORT}/getConfig",
         auth=aiohttp.BasicAuth(USER, PASS),
     )
     assert status == 200, f"Expected 200, got {status}"
@@ -59,7 +115,7 @@ async def test_raw_auth() -> None:
 
     print()
     print("=" * 60)
-    print("TEST 4: /mock/* endpoints bypass auth")
+    print("TEST 5: /mock/* endpoints bypass auth")
     print("=" * 60)
     status, body = await _request(f"http://{HOST}:{PORT}/mock/state")
     assert status == 200, f"Expected 200, got {status}"
@@ -69,7 +125,7 @@ async def test_raw_auth() -> None:
 async def test_api_client() -> None:
     print()
     print("=" * 60)
-    print("TEST 5: VioletPoolAPI - wrong credentials -> error")
+    print("TEST 6: VioletPoolAPI - wrong credentials -> error on /getConfig")
     print("=" * 60)
     async with aiohttp.ClientSession() as session:
         api_bad = VioletPoolAPI(
@@ -80,14 +136,14 @@ async def test_api_client() -> None:
             max_retries=1,
         )
         try:
-            await api_bad.get_readings()
+            await api_bad.get_config(["DOSAGE_phminus_setpoint"])
             assert False, "Should have raised VioletPoolAPIError"
         except VioletPoolAPIError as exc:
             print(f"  OK: VioletPoolAPIError raised: {exc}")
 
     print()
     print("=" * 60)
-    print("TEST 6: VioletPoolAPI - correct credentials -> full workflow")
+    print("TEST 7: VioletPoolAPI - correct credentials -> full workflow")
     print("=" * 60)
     async with aiohttp.ClientSession() as session:
         api = VioletPoolAPI(
@@ -181,7 +237,7 @@ async def test_api_client() -> None:
 
     print()
     print("=" * 60)
-    print("TEST 7: Error simulation with auth")
+    print("TEST 8: Error simulation with auth")
     print("=" * 60)
     async with aiohttp.ClientSession() as session:
         async with session.get(f"http://{HOST}:{PORT}/mock/error?code=500&count=1") as r:
@@ -211,12 +267,7 @@ async def test_api_client() -> None:
 
 def main() -> None:
     print(f"Starting mock server on port {PORT} with auth ({USER}:{PASS})...")
-    proc = subprocess.Popen(
-        [sys.executable, "tests/mock_server.py", "--port", str(PORT), "--user", USER, "--password", PASS],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(2)
+    proc = _start_mock_server()
 
     try:
         asyncio.run(test_raw_auth())

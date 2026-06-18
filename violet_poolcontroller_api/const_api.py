@@ -42,14 +42,71 @@ API_GET_HISTORY = "/getHistory"
 API_GET_WEATHER_DATA = "/getWeatherdata"
 API_GET_OVERALL_DOSING = "/getOverallDosing"
 API_GET_OUTPUT_STATES = "/getOutputstates"
+API_GET_OUTPUT_RUNTIMES = "/getOutputruntimes"
 API_GET_LOG = "/getLog"
 API_GET_NOTIFICATIONS = "/getNotifications"
+# Resets error/fault blockings on the controller (e.g. clears BLOCKED_BY_ESC
+# after an empty-canister alarm was acknowledged).  GET, no body.
+# Source: server.js:2192 + includes/resetBlocking.js.
+API_RESET_BLOCKING = "/resetBlocking"
+# Updates the canister fill level for a dosing channel after a refill.
+# POST with form fields ``action`` (ADJUST|RESET), ``which`` (e.g. DOS_1_CL),
+# ``amount`` (ml), ``cid`` (1=CL, 2=ELO, 3=H2O2, 4=PHM, 5=PHP, 6=FLOC).
+# Source: server.js:2228 + includes/setCanAmount.js.
+API_SET_CAN_AMOUNT = "/setCanAmount"
+# Returns JSON dict of system service states (proftpd, shairport,
+# tunnel_state, samba, sshd, support_tunnel_state, homekit).
+# Source: server.js:2154 + includes/getServiceStates.js.
+API_GET_SERVICE_STATES = "/getServiceStates"
+# Live single-row trace of every controller reading (CSV with header).
+# Source: server.js:2134 + includes/getHistory.js (getLiveTrace).
+# Returns a 3-line text/plain body: header row, units row, values row
+# (semicolon-separated, German decimal comma).  Useful for ad-hoc
+# troubleshooting – not meant for regular polling.
+API_GET_LIVE_TRACE = "/getLiveTrace"
+# RS485 pump endpoints.  /getRS485PumpData returns the live data +
+# register config of the named pump model; /setRS485Live sends live
+# control data (mode + level) to the pump's modbus slave.
+# Source: server.js:2157-2158 + includes/getRS485PumpData.js +
+# includes/setRS485Live.js.
+API_GET_RS485_PUMP_DATA = "/getRS485PumpData"
+API_SET_RS485_LIVE = "/setRS485Live"
+API_INIT_UPDATE = "/initUpdate"
+API_GET_UPDATE_STATE = "/getUpdateState"
+API_GET_UPDATE_HISTORY = "/getUpdateHistory"
 
 LOG_TYPE_ACTIONS = "actions"
 LOG_TYPE_SWITCHING = "switching"
 LOG_TYPE_ONEWIRE = "onewire"
 
 # Settings for optimizing data refreshes by fetching specific groups.
+#
+# The controller's /getReadings endpoint (firmware includes/getReadings.js)
+# accepts a comma-separated query string after ``?``.  Plain ``ALL`` returns
+# only the base READINGS object plus INPUTSTATES.  To receive the additional
+# computed fields the controller exposes, the request MUST also include one
+# of the following tokens – they are not regex matchers but feature flags:
+#
+#   ``DOSAGE``       → adds DOS_*_DAILY_DOSING_AMOUNT_ML,
+#                       DOS_*_TOTAL_CAN_AMOUNT_ML, DOS_*_LAST_CAN_RESET,
+#                       DOS_*_STATE (array of strings),
+#                       DOS_*_USE, DOS_*_TYPE, DOS_*_REMAINING_RANGE,
+#                       DOS_2_CURRENT_POLARITY
+#   ``RUNTIMES``     → adds *_RUNTIME strings, OUTPUTSTATES_FINAL fields,
+#                       OVERFLOW_*, BATHING_AI_*, COVER_*, BACKWASH_STEP,
+#                       BACKWASH_OMNI_*
+#   ``PUMPPRIOSTATE`` → adds composite PUMPSTATE / HEATERSTATE / SOLARSTATE
+#                       strings in the form ``"<state>|<cause_key>"``
+#                       (e.g. ``"3|PUMP_ANTI_FREEZE"``)
+#   ``BACKWASH``     → adds BACKWASH.* runtime counters
+#   ``SYSTEM``       → adds SYSTEM_* diagnostics (CPU temp, memory, versions)
+#
+# In addition, every token that is NOT ``ALL`` is interpreted as a regex
+# (case-sensitive) and matched against every READINGS key – so generic
+# prefixes like ``ADC``, ``INPUT1`` … ``INPUT4`` work as wildcard filters.
+# Mixing ``ALL`` with such prefixes is fine but redundant.
+#
+# Source: includes/getReadings.js (firmware 1.0.9).
 SPECIFIC_READING_GROUPS = (
     "ADC",
     "DOSAGE",
@@ -133,8 +190,10 @@ DMX_SCENE_COUNT = 12  # Number of DMX scenes supported by the controller
 for scene_num in range(1, DMX_SCENE_COUNT + 1):
     SWITCH_FUNCTIONS[f"DMX_SCENE{scene_num}"] = f"DMX Szene {scene_num}"
 
-# Dynamically add digital input rules
-for rule_num in range(1, 8):
+# Dynamically add digital input rules (controller exposes SWITCHINGRULE_1..8
+# internally; we surface them as DIRULE_1..8 in line with the controller's
+# DIGITALINPUTRULE_STATE_DIGITALINPUT_RULE_1..8 keys – see setFunctionManually.js).
+for rule_num in range(1, 9):
     SWITCH_FUNCTIONS[f"DIRULE_{rule_num}"] = f"Schaltregel {rule_num}"
 
 # Dynamically add Omni DC outputs
@@ -167,6 +226,120 @@ DOSING_CONFIG_PREFIX = {
     "H2O2": "DOSAGE_h2o2",
 }
 
+# Controller-internal canister ID for /setCanAmount (form field ``cid``).
+# Source: includes/setCanAmount.js (cid 1..6).  Index 0 is intentionally
+# absent – the firmware has no channel 0 for canister management.
+DOSING_CANISTER_ID: dict[str, int] = {
+    "DOS_1_CL": 1,   # Chlorine
+    "DOS_2_ELO": 2,  # Electrolysis (also covers H2O2 cid=3 via DOS_1_CL)
+    "DOS_4_PHM": 4,  # pH-
+    "DOS_5_PHP": 5,  # pH+
+    "DOS_6_FLOC": 6, # Flocculant
+}
+
+# =============================================================================
+# OMNITRONIC MULTI-PORT VALVE
+# =============================================================================
+# Source: includes/setFunctionManually.js manualOmniSwitching (fw 1.0.9).
+# The OmniTronic is a motorised 6-position multi-port valve.  Position 0 is
+# always "Filtration" and doubles as the "return to automatic mode" command:
+# sending OMNI_DC0 clears the BACKWASH_RULE and releases the manual override
+# on every other output.  Positions 1-5 correspond to the valve's other
+# physical ports (backwash, rinse, waste, etc.) – the exact physical meaning
+# depends on the valve's plumbing, but the controller treats them generically.
+#
+# Command format:  setFunctionManually?OMNI,OMNI_DC<N>
+# The pump (and dependent outputs like heater/solar/dosing) are blocked with
+# priority 5 while the valve is moving; typical change-over time is ~3 s per
+# step, so a full 0->5 sweep takes ~18 s.
+OMNI_POSITIONS: dict[int, str] = {
+    0: "OMNI_DC0",  # Filtration (also: return to AUTO mode)
+    1: "OMNI_DC1",
+    2: "OMNI_DC2",
+    3: "OMNI_DC3",
+    4: "OMNI_DC4",
+    5: "OMNI_DC5",
+}
+
+# =============================================================================
+# RS485 VARIABLE-SPEED PUMPS
+# =============================================================================
+# Source: includes/getRS485PumpData.js + includes/setRS485Live.js + the pump
+# config JSON files under /config/RS485_PUMP/ (fw 1.0.9).
+#
+# The controller can drive a single RS485-modbus variable-speed pump
+# (typically a BADU Eco Drive II / Eco Flex / Prime Neo VS).  Three control
+# modes are supported; the pump's JSON config declares which modes are valid
+# (most BADU pumps expose only HZ, the field "MOTIONCONTROLMODE_VALIDMODES").
+RS485_PUMP_MODES = ("rpm", "pwr", "hz")
+
+# Known pump-model identifiers accepted by /getRS485PumpData and
+# /setRS485Live (first query argument).  Each corresponds to a
+# config/RS485_PUMP/<NAME>.json file shipped with the firmware.
+RS485_PUMP_NAMES: tuple[str, ...] = (
+    "BADU_ECO_DRIVE_II",
+    "BADU_ECO_FLEX",
+    "BADU_PRIME_NEO_VS",
+)
+
+# =============================================================================
+# SYSTEM SERVICE TOGGLES
+# =============================================================================
+# Source: server.js:2165-2200 + includes/getServiceStates.js.
+# Each service has its own /enable* and /disable* GET endpoint; state can be
+# queried via /getServiceStates which returns the keys in the right-hand map.
+SYSTEM_SERVICES: dict[str, dict[str, str]] = {
+    "ftp": {
+        "enable_endpoint": "/enableFTP",
+        "disable_endpoint": "/disableFTP",
+        "state_key": "proftpd",
+        "label": "FTP server",
+    },
+    "samba": {
+        "enable_endpoint": "/enableSAMBA",
+        "disable_endpoint": "/disableSAMBA",
+        "state_key": "samba",
+        "label": "Samba (Windows share)",
+    },
+    "ssh": {
+        "enable_endpoint": "/enableSSH",
+        "disable_endpoint": "/disableSSH",
+        "state_key": "sshd",
+        "label": "SSH server",
+    },
+    "shairport": {
+        "enable_endpoint": "/enableSHAIRPORT",
+        "disable_endpoint": "/disableSHAIRPORT",
+        "state_key": "shairport",
+        "label": "AirPlay (Shairport)",
+    },
+    "homebridge": {
+        "enable_endpoint": "/enableHOMEBRIDGE",
+        "disable_endpoint": "/disableHOMEBRIDGE",
+        "state_key": "homekit",
+        "label": "HomeKit bridge (Homebridge)",
+    },
+    "alexa": {
+        "enable_endpoint": "/enableALEXA",
+        "disable_endpoint": "/disableALEXA",
+        # Alexa state is not exposed by /getServiceStates.
+        "state_key": "",
+        "label": "Amazon Alexa",
+    },
+    "tunnel": {
+        "enable_endpoint": "/enableTUNNEL",
+        "disable_endpoint": "/disableTUNNEL",
+        "state_key": "tunnel_state",
+        "label": "Cloud tunnel",
+    },
+    "support_tunnel": {
+        "enable_endpoint": "/enableSUPPORTTUNNEL",
+        "disable_endpoint": "/disableSUPPORTTUNNEL",
+        "state_key": "support_tunnel_state",
+        "label": "Support tunnel",
+    },
+}
+
 # =============================================================================
 # CONTROLLER ERROR CODES (Manual Section 27.2 - Software 1.1.9)
 # =============================================================================
@@ -177,6 +350,11 @@ DOSING_CONFIG_PREFIX = {
 ERROR_SEVERITY_ALARM = "ALARM"
 ERROR_SEVERITY_WARNING = "WARNING"
 ERROR_SEVERITY_INFO = "INFO"
+# REMINDER is a fourth category used by the controller for non-critical,
+# user-actionable notifications (calibration due, update available, birthday
+# greeting, daily status).  It is softer than INFO and should never trigger
+# an alarm sensor in Home Assistant.
+ERROR_SEVERITY_REMINDER = "REMINDER"
 
 ERROR_CODES: dict[str, dict[str, str]] = {
     # -- System messages --
@@ -186,9 +364,16 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "severity": ERROR_SEVERITY_ALARM,
         "message": "Hardwareproblem (COM-Link zum Carrier fehlerhaft)",
     },
+    # 0003: Friendly birthday greeting from the manufacturer (REMINDER).
+    "0003": {
+        "severity": ERROR_SEVERITY_REMINDER,
+        "message": "Alles Gute zum Geburtstag!",
+    },
+    # 0005: Generic system status notification (REMINDER, not an error).
+    # Source: notifications/codelist_*.csv row "0005".
     "0005": {
-        "severity": ERROR_SEVERITY_INFO,
-        "message": "Wartungsarbeiten am Cloud-Server",
+        "severity": ERROR_SEVERITY_REMINDER,
+        "message": "Systemnachricht",
     },
     "0008": {"severity": ERROR_SEVERITY_WARNING, "message": "CPU-Temperatur hoch (> 83°C)"},
     "0009": {
@@ -196,15 +381,15 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "message": "CPU-Temperatur zu hoch (> 95°C)",
     },
     "0010": {
-        "severity": ERROR_SEVERITY_INFO,
+        "severity": ERROR_SEVERITY_REMINDER,
         "message": "Update steht zur Installation bereit. Keine Aktion erforderlich.",
     },
     "0011": {
-        "severity": ERROR_SEVERITY_INFO,
+        "severity": ERROR_SEVERITY_REMINDER,
         "message": "Update steht zur Installation bereit. Installation erforderlich.",
     },
     "0012": {
-        "severity": ERROR_SEVERITY_INFO,
+        "severity": ERROR_SEVERITY_REMINDER,
         "message": "Update steht zur Installation bereit. Installation erforderlich.",
     },
     # -- Filter / Circulation monitoring --
@@ -261,6 +446,24 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "0042": {
         "severity": ERROR_SEVERITY_INFO,
         "message": "Nachspeisung fehlgeschlagen",
+    },
+    # -- OmniTronic multi-port valve faults (BACKWASH_type == 1) --
+    # Source: controlfunction_omni.js + notifications/codelist_*.csv 0045-0049.
+    "0045": {
+        "severity": ERROR_SEVERITY_ALARM,
+        "message": "OmniTronic gibt keine Positionsrückmeldung (Rückspülen)",
+    },
+    "0046": {
+        "severity": ERROR_SEVERITY_ALARM,
+        "message": "OmniTronic gibt keine Positionsrückmeldung (Nachspülen)",
+    },
+    "0047": {
+        "severity": ERROR_SEVERITY_ALARM,
+        "message": "Fehler bei Positionierung des Omni-Antriebs (Timeout)",
+    },
+    "0049": {
+        "severity": ERROR_SEVERITY_ALARM,
+        "message": "OmniTronic-Fehler: Rückmeldekontakt z1/z2 nicht geschlossen",
     },
     # -- Skimmer water level --
     "0050": {
@@ -490,6 +693,28 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "severity": ERROR_SEVERITY_WARNING,
         "message": "Elektrolyse: maximale Gesamt-Betriebszeit erreicht",
     },
+    "0135": {
+        "severity": ERROR_SEVERITY_WARNING,
+        "message": "Elektrolyse: Durchflussschalter ausgelöst",
+    },
+    # -- H2O2 dosing (shares physical output DOS_1_CL with Chlorine; selected
+    # via triggerManualDosing `from=3`. Source: dosage_controller_h2o2.js) --
+    "0142": {
+        "severity": ERROR_SEVERITY_WARNING,
+        "message": "H2O2-Dosierung: max. Tagesdosierleistung erreicht",
+    },
+    "0143": {
+        "severity": ERROR_SEVERITY_WARNING,
+        "message": "H2O2-Dosierung: Kanister Restinhalt niedrig",
+    },
+    "0144": {
+        "severity": ERROR_SEVERITY_WARNING,
+        "message": "H2O2-Dosierung: Kanister leer",
+    },
+    "0145": {
+        "severity": ERROR_SEVERITY_WARNING,
+        "message": "Leermeldekontakt: H2O2-Kanister",
+    },
     # -- pH- dosing --
     "0150": {
         "severity": ERROR_SEVERITY_WARNING,
@@ -533,6 +758,10 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "message": "Leermeldekontakt: pH-plus Kanister",
     },
     # -- Flocculant --
+    "0172": {
+        "severity": ERROR_SEVERITY_WARNING,
+        "message": "Flockmittel: max. Tagesdosierleistung erreicht",
+    },
     "0173": {
         "severity": ERROR_SEVERITY_WARNING,
         "message": "Flockmittel: Kanister Restinhalt niedrig",
@@ -545,17 +774,17 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "severity": ERROR_SEVERITY_WARNING,
         "message": "Leermeldekontakt: Flockmittel Kanister",
     },
-    # -- Calibration reminders --
+    # -- Calibration reminders (REMINDER category, not an error) --
     "0180": {
-        "severity": ERROR_SEVERITY_INFO,
+        "severity": ERROR_SEVERITY_REMINDER,
         "message": "Erinnerung: pH-Elektrode kalibrieren",
     },
     "0181": {
-        "severity": ERROR_SEVERITY_INFO,
+        "severity": ERROR_SEVERITY_REMINDER,
         "message": "Erinnerung: Redox-Elektrode kalibrieren",
     },
     "0182": {
-        "severity": ERROR_SEVERITY_INFO,
+        "severity": ERROR_SEVERITY_REMINDER,
         "message": "Erinnerung: Chlor-Elektrode kalibrieren",
     },
     # -- Hardware modules --
@@ -590,5 +819,9 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "0209": {
         "severity": ERROR_SEVERITY_ALARM,
         "message": "Falsch codierte Relais Erweiterung erkannt.",
+    },
+    "0210": {
+        "severity": ERROR_SEVERITY_ALARM,
+        "message": "Falsch codierte Relais-Erweiterung erkannt (Duplikat).",
     },
 }

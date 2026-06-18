@@ -1,4 +1,4 @@
-# violet-poolController-api - API für Violet Pool Controller
+# violet-poolController-api - API f├╝r Violet Pool Controller
 # Copyright (C) 2024-2026  Xerolux
 #
 # This program is free software: you can redistribute it and/or modify
@@ -19,9 +19,13 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
+import math
+import random
 import re
+import ssl
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote, urlparse, urlunparse
 
@@ -32,6 +36,7 @@ from .const_api import (
     ACTION_ALLAUTO,
     ACTION_ALLOFF,
     ACTION_ALLON,
+    ACTION_AUTO,
     ACTION_COLOR,
     ACTION_LOCK,
     ACTION_OFF,
@@ -42,31 +47,48 @@ from .const_api import (
     API_GET_CALIB_RAW_VALUES,
     API_GET_CONFIG,
     API_GET_HISTORY,
+    API_GET_LIVE_TRACE,
     API_GET_LOG,
     API_GET_NOTIFICATIONS,
+    API_GET_OUTPUT_RUNTIMES,
     API_GET_OUTPUT_STATES,
     API_GET_OVERALL_DOSING,
+    API_GET_RS485_PUMP_DATA,
+    API_GET_SERVICE_STATES,
+    API_GET_UPDATE_HISTORY,
+    API_GET_UPDATE_STATE,
     API_GET_WEATHER_DATA,
+    API_INIT_UPDATE,
     API_PRIORITY_CRITICAL,
     API_PRIORITY_NORMAL,
     API_READINGS,
+    API_RESET_BLOCKING,
     API_RESTORE_CALIBRATION,
+    API_SET_CAN_AMOUNT,
     API_SET_CONFIG,
     API_SET_FUNCTION_MANUALLY,
     API_SET_OUTPUT_TESTMODE,
+    API_SET_RS485_LIVE,
     API_TRIGGER_MANUAL_DOSING,
+    DOSING_CANISTER_ID,
     DOSING_CONFIG_PREFIX,
     DOSING_FUNCTIONS,
     DOSING_OUTPUT_INDEX,
     ERROR_CODES,
     ERROR_SEVERITY_ALARM,
     ERROR_SEVERITY_INFO,
+    ERROR_SEVERITY_REMINDER,
     ERROR_SEVERITY_WARNING,
+    OMNI_POSITIONS,
+    RS485_PUMP_MODES,
+    RS485_PUMP_NAMES,
+    SYSTEM_SERVICES,
     TARGET_MIN_CHLORINE,
     TARGET_ORP,
     TARGET_PH,
 )
-from .const_devices import DEVICE_PARAMETERS
+from .const_devices import COVER_FUNCTIONS, DEVICE_PARAMETERS
+from .readings import VioletReadings
 from .utils_rate_limiter import get_global_rate_limiter
 from .utils_sanitizer import InputSanitizer
 
@@ -79,11 +101,104 @@ _MAX_HOSTNAME_LENGTH = 253
 _HTTP_SERVER_ERROR = 500
 _HTTP_CLIENT_ERROR = 400
 _HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_UNAUTHORIZED = 401
+_HTTP_FORBIDDEN = 403
 _MIN_CALIB_HISTORY_PARTS = 3
+
+# Valid setpoint ranges for each configurable target key (inclusive bounds).
+# Values outside these ranges or non-finite values are rejected before the
+# HTTP call to avoid surprising controller behaviour.
+SETPOINT_RANGES: dict[str, tuple[float, float]] = {
+    TARGET_PH: (6.0, 8.0),
+    TARGET_ORP: (500.0, 900.0),
+    TARGET_MIN_CHLORINE: (0.0, 5.0),
+    "HEATER_set_temp": (5.0, 45.0),
+    "SOLAR_maxtemp": (5.0, 55.0),
+}
+
+
+# =============================================================================
+# Exception hierarchy
+# =============================================================================
 
 
 class VioletPoolAPIError(Exception):
-    """Raised when the Violet Pool Controller API returns an error."""
+    """Base exception for all Violet Pool Controller API errors.
+
+    Callers can catch this base class to handle any API failure, or use
+    the specific subclasses for more targeted error handling.
+    """
+
+
+class VioletAuthError(VioletPoolAPIError):
+    """Raised when the controller rejects credentials (HTTP 401 or 403)."""
+
+
+class VioletTimeoutError(VioletPoolAPIError):
+    """Raised when an HTTP request to the controller exceeds the timeout."""
+
+
+class VioletPayloadError(VioletPoolAPIError):
+    """Raised when the controller returns a malformed or unparseable response."""
+
+
+class VioletSetpointError(VioletPoolAPIError, ValueError):
+    """Raised when a setpoint value is outside its documented valid range.
+
+    Inherits from both ``VioletPoolAPIError`` and ``ValueError`` so callers
+    can catch it as either.
+    """
+
+
+class VioletUnsafeOperationError(VioletPoolAPIError):
+    """Raised for potentially dangerous operations without explicit acknowledgment.
+
+    Pass ``acknowledge_unsafe=True`` to the relevant method to confirm that
+    the caller is aware of the risk (e.g. motorised cover movement).
+    """
+
+
+class _DeterministicClientError(Exception):
+    """Internal marker for 4xx client errors.
+
+    Deliberately inherits from neither VioletPoolAPIError nor
+    aiohttp.ClientError so it bypasses both the retry loop and the
+    circuit breaker failure count: 4xx responses are deterministic
+    (bad credentials, unknown endpoint) and must not open the breaker
+    that protects against a down controller or network.  It is
+    translated to the appropriate VioletPoolAPIError subclass before
+    reaching the caller.
+    """
+
+    def __init__(self, msg: str, *, is_auth: bool = False) -> None:
+        super().__init__(msg)
+        self.is_auth = is_auth
+
+
+def validate_setpoint(field: str, value: float) -> None:
+    """Validate a setpoint value against documented controller ranges.
+
+    Args:
+        field: The configuration key (e.g. ``"DOSAGE_phminus_setpoint"``).
+        value: The numeric value to validate.
+
+    Raises:
+        VioletSetpointError: If ``value`` is non-finite or outside the
+            documented valid range for ``field``.  Fields with no registered
+            range are accepted without range checking.
+    """
+    if not math.isfinite(value):
+        msg = f"Invalid setpoint for '{field}': {value!r} is not a finite number"
+        raise VioletSetpointError(msg)
+
+    bounds = SETPOINT_RANGES.get(field)
+    if bounds is None:
+        return  # No documented range — accept any finite value
+
+    lo, hi = bounds
+    if not lo <= value <= hi:
+        msg = f"Setpoint '{field}' value {value} is outside the valid range [{lo}, {hi}]"
+        raise VioletSetpointError(msg)
 
 
 class VioletPoolAPI:
@@ -140,22 +255,23 @@ class VioletPoolAPI:
         # SSL/TLS security configuration
         self._verify_ssl = verify_ssl
         self._use_ssl = use_ssl
-        self._ssl_context = None
+        self._ssl_context: ssl.SSLContext | None = None
         if use_ssl and not verify_ssl:
             _LOGGER.warning(
                 "SSL certificate verification is DISABLED. "
                 "This is a security risk and should only be used for testing "
                 "or with self-signed certificates in trusted networks.",
             )
-            import ssl  # noqa: PLC0415
-
             self._ssl_context = ssl.create_default_context()
             self._ssl_context.check_hostname = False
             self._ssl_context.verify_mode = ssl.CERT_NONE
 
         # Rate limiting to protect the controller from being overloaded
         self._rate_limiter = get_global_rate_limiter()
-        self._circuit_breaker = CircuitBreaker(expected_exception=VioletPoolAPIError)
+        self._circuit_breaker = CircuitBreaker(
+            expected_exception=VioletPoolAPIError,
+            ignored_exceptions=(_DeterministicClientError,),
+        )
         _LOGGER.debug(
             "API initialized with rate limiting enabled, SSL=%s, verify_ssl=%s",
             use_ssl,
@@ -192,10 +308,14 @@ class VioletPoolAPI:
         return self._dosing_standalone
 
     @property
-    def _ssl_param(self) -> bool | None:
-        """Return the SSL parameter for aiohttp requests."""
+    def _ssl_param(self) -> ssl.SSLContext | bool:
+        """Return the SSL parameter for aiohttp requests.
+
+        For plain-HTTP connections the value is ignored by aiohttp, so the
+        library default (True) is returned.
+        """
         if not self._use_ssl:
-            return None
+            return True
         if self._ssl_context is not None:
             return self._ssl_context
         return True
@@ -212,18 +332,63 @@ class VioletPoolAPI:
             parsed = urlparse(host)
             host = parsed.netloc
 
-        # Validate hostname format (allowing optional port)
-        if not re.match(r"^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?$", host):
+        try:
+            literal_ip = ipaddress.ip_address(host)
+        except ValueError:
+            literal_ip = None
+        if literal_ip is not None and literal_ip.version == 6:
+            protocol = "https" if use_ssl else "http"
+            return urlunparse((protocol, f"[{host}]", "", "", "", ""))
+
+        try:
+            parsed_host = urlparse(f"//{host}")
+        except ValueError as err:
+            msg = f"Invalid hostname format: {host}"
+            raise ValueError(msg) from err
+
+        if parsed_host.username or parsed_host.password:
+            msg = f"Invalid hostname format: {host}"
+            raise ValueError(msg)
+        if parsed_host.path or parsed_host.query or parsed_host.fragment:
+            msg = f"Invalid hostname format: {host}"
+            raise ValueError(msg)
+
+        hostname = parsed_host.hostname
+        if not hostname:
+            msg = f"Invalid hostname format: {host}"
+            raise ValueError(msg)
+
+        try:
+            port = parsed_host.port
+        except ValueError as err:
+            msg = f"Invalid port in hostname: {host}"
+            raise ValueError(msg) from err
+
+        if port is not None and not 1 <= port <= 65535:
+            msg = f"Invalid port in hostname: {host}"
+            raise ValueError(msg)
+
+        try:
+            ipaddress.ip_address(hostname)
+            is_ip_literal = True
+        except ValueError:
+            is_ip_literal = False
+
+        if not is_ip_literal and not re.match(r"^[a-zA-Z0-9.-]+$", hostname):
             msg = f"Invalid hostname format: {host}"
             raise ValueError(msg)
 
         # Additional validation
-        if len(host) > _MAX_HOSTNAME_LENGTH or ".." in host or "//" in host:
+        if len(hostname) > _MAX_HOSTNAME_LENGTH or ".." in hostname or "//" in host:
             msg = f"Invalid hostname: {host}"
             raise ValueError(msg)
 
+        netloc = f"[{hostname}]" if ":" in hostname else hostname
+        if port is not None:
+            netloc = f"{netloc}:{port}"
+
         protocol = "https" if use_ssl else "http"
-        return urlunparse((protocol, host, "", "", "", ""))
+        return urlunparse((protocol, netloc, "", "", "", ""))
 
     def _build_url(self, endpoint: str) -> str:
         """Construct the full URL for a given endpoint.
@@ -316,13 +481,15 @@ class VioletPoolAPI:
                             response.status >= _HTTP_CLIENT_ERROR
                             and response.status < _HTTP_SERVER_ERROR
                         ):
+                            # Client errors (4xx, except 429 handled above) are
+                            # deterministic - fail fast instead of retrying.
                             body = await response.text()
-                            raise aiohttp.ClientResponseError(
-                                request_info=response.request_info,
-                                history=response.history,
-                                status=response.status,
-                                message=(f"HTTP {response.status} for {endpoint}: {body.strip()}"),
+                            msg = f"HTTP {response.status} for {endpoint}: {body.strip()}"
+                            is_auth = response.status in (
+                                _HTTP_UNAUTHORIZED,
+                                _HTTP_FORBIDDEN,
                             )
+                            raise _DeterministicClientError(msg, is_auth=is_auth)
 
                         if expect_json:
                             try:
@@ -333,13 +500,26 @@ class VioletPoolAPI:
                             ) as err:
                                 body = await response.text()
                                 msg = f"Invalid JSON payload for {endpoint}: {body.strip()}"
-                                raise VioletPoolAPIError(
-                                    msg,
-                                ) from err
+                                raise VioletPayloadError(msg) from err
 
                         return await response.text()
 
-                except (TimeoutError, aiohttp.ClientError) as err:
+                except (TimeoutError, aiohttp.ServerTimeoutError) as err:
+                    last_error = VioletTimeoutError(
+                        f"Request to {endpoint} timed out: {err}",
+                    )
+                    _LOGGER.debug(
+                        "Attempt %d for %s timed out: %s",
+                        attempt,
+                        endpoint,
+                        err,
+                    )
+                    if attempt == self._max_retries:
+                        raise last_error from None
+                    delay = min(2.0, 0.2 * (2 ** (attempt - 1)))
+                    jitter = random.uniform(0, delay * 0.1)  # Add 0-10% jitter
+                    await asyncio.sleep(delay + jitter)
+                except aiohttp.ClientError as err:
                     last_error = VioletPoolAPIError(
                         f"Error communicating with Violet controller: {err}",
                     )
@@ -353,13 +533,18 @@ class VioletPoolAPI:
                         raise last_error from None
                     # Exponential backoff with jitter
                     delay = min(2.0, 0.2 * (2 ** (attempt - 1)))
-                    await asyncio.sleep(delay)
+                    jitter = random.uniform(0, delay * 0.1)  # Add 0-10% jitter
+                    await asyncio.sleep(delay + jitter)
 
             msg = "All retry attempts exhausted"
             raise VioletPoolAPIError(msg)
 
         try:
             return await self._circuit_breaker.call(_execute_request)
+        except _DeterministicClientError as err:
+            if err.is_auth:
+                raise VioletAuthError(str(err)) from err
+            raise VioletPoolAPIError(str(err)) from err
         except CircuitBreakerOpenError as err:
             msg = "Circuit breaker is open due to repeated communication failures"
             raise VioletPoolAPIError(
@@ -389,11 +574,20 @@ class VioletPoolAPI:
             return body
 
         text = (body or "").strip()
-        success = not text or "error" not in text.lower()
+        lines = text.splitlines() if text else []
+        first_line = lines[0].strip().upper() if lines else ""
+
+        # Manual section 26.2: line 1 of the response is "OK" or "ERROR".
+        # Dosing responses use "MANDOS_STARTED\nOK" instead, so fall back to
+        # a substring check when the first line is neither marker.
+        if first_line.startswith("ERROR"):
+            success = False
+        elif first_line == "OK":
+            success = True
+        else:
+            success = not text or "error" not in text.lower()
 
         result: dict[str, Any] = {"success": success, "response": text}
-
-        lines = text.splitlines() if text else []
         if len(lines) >= 2:
             result["output"] = lines[1].strip()
         if len(lines) >= 3:
@@ -586,11 +780,17 @@ class VioletPoolAPI:
             readings = {k: v for k, v in readings.items() if not k.startswith("EXT2")}
         return readings
 
-    async def get_readings(self) -> dict[str, Any]:
-        """Return the complete dataset from the controller.
+    async def get_readings(self) -> VioletReadings:
+        """Return the complete dataset from the controller as a typed snapshot.
+
+        The returned :class:`~violet_poolcontroller_api.readings.VioletReadings`
+        object implements :class:`~collections.abc.Mapping`, so all existing
+        code that accesses ``data.get("KEY")`` or ``"KEY" in data`` continues
+        to work unchanged.  Typed properties (``readings.pump``,
+        ``readings.ph``, etc.) are available as an additive convenience.
 
         Returns:
-            A dictionary containing all readings.
+            A :class:`VioletReadings` instance wrapping all readings.
 
         Raises:
             VioletPoolAPIError: If the payload is unexpected.
@@ -601,7 +801,8 @@ class VioletPoolAPI:
             query="ALL",
             payload_name="getReadings",
         )
-        return self._flatten_getreadings_response(response)
+        flat = self._flatten_getreadings_response(response)
+        return VioletReadings(flat)
 
     async def get_hardware_profile(self) -> dict[str, bool]:
         """Detect connected hardware modules from the controller readings.
@@ -619,28 +820,39 @@ class VioletPoolAPI:
             query="ALL",
             payload_name="getReadings",
         )
-        readings = self._flatten_getreadings_response(response)
+        # Use flat dict directly (VioletReadings wrapping not needed here)
+        flat = self._flatten_getreadings_response(response)
 
-        has_base = not self._dosing_standalone and bool(readings)
+        has_base = not self._dosing_standalone and bool(flat)
         return {
             "base_module": has_base,
-            "dosing_module": self._dosing_standalone
-            or "SYSTEM_dosagemodule_alive_count" in readings,
-            "extension_module_1": "SYSTEM_ext1module_alive_count" in readings,
-            "extension_module_2": "SYSTEM_ext2module_alive_count" in readings,
+            "dosing_module": self._dosing_standalone or "SYSTEM_dosagemodule_alive_count" in flat,
+            "extension_module_1": "SYSTEM_ext1module_alive_count" in flat,
+            "extension_module_2": "SYSTEM_ext2module_alive_count" in flat,
         }
 
     async def get_specific_readings(
         self,
         categories: list[str] | tuple[str, ...],
-    ) -> dict[str, Any]:
-        """Return a reduced dataset for the provided categories.
+    ) -> VioletReadings:
+        """Return a reduced typed snapshot for the provided categories.
+
+        Categories are joined with ``,`` and sent as the query string of
+        ``/getReadings?<categories>``.  See
+        :data:`~violet_poolcontroller_api.const_api.SPECIFIC_READING_GROUPS`
+        for the special tokens (``DOSAGE``, ``RUNTIMES``, ``PUMPPRIOSTATE``,
+        ``BACKWASH``, ``SYSTEM``) that act as feature flags rather than
+        regex matchers – without them the corresponding computed fields are
+        NOT included in the response, even when ``ALL`` is present.
 
         Args:
-            categories: A list or tuple of category strings to fetch.
+            categories: A list or tuple of category strings to fetch.  To
+                receive computed dosing stats, runtimes, or priority states,
+                include ``ALL`` plus the respective token
+                (e.g. ``["ALL", "DOSAGE"]``).
 
         Returns:
-            A dictionary containing the requested readings.
+            A :class:`VioletReadings` instance for the requested categories.
 
         Raises:
             VioletPoolAPIError: If no categories are provided
@@ -657,7 +869,7 @@ class VioletPoolAPI:
             query=query,
             payload_name="getReadings",
         )
-        return self._flatten_getreadings_response(response)
+        return VioletReadings(self._flatten_getreadings_response(response))
 
     async def get_history(
         self,
@@ -946,6 +1158,9 @@ class VioletPoolAPI:
         if key.startswith("DOS_"):
             return await self._trigger_dosing(key, action, duration=duration)
 
+        if key == "PVSURPLUS":
+            action = self._normalize_pv_surplus_action(action)
+
         payload = self._build_manual_command(
             key,
             action,
@@ -965,16 +1180,22 @@ class VioletPoolAPI:
     ) -> dict[str, Any]:
         """Trigger or stop a manual dosing run via /triggerManualDosing.
 
+        setFunctionManually does not work for dosing outputs (confirmed by
+        PoolDigital in the support forum): neither ON nor AUTO has any
+        effect there. Starting AND stopping a manual dosing run must both
+        go through /triggerManualDosing.
+
         Args:
             key: The dosing pump key (e.g. DOS_6_FLOC).
-            action: The action (ON/START → DOSSTART, OFF/STOP → DOSSTOP).
+            action: ON/START ÔåÆ DOSSTART; OFF/STOP/AUTO ÔåÆ DOSSTOP
+                (stopping a run returns the channel to automatic mode).
             duration: Duration in seconds.
 
         Returns:
             A dictionary with the command result.
 
         Raises:
-            VioletPoolAPIError: If the dosing key is unknown.
+            VioletPoolAPIError: If the dosing key or action is unknown.
 
         """
         output_index = DOSING_OUTPUT_INDEX.get(key)
@@ -982,7 +1203,17 @@ class VioletPoolAPI:
             msg = f"Unknown dosing output key: {key}"
             raise VioletPoolAPIError(msg)
 
-        dos_action = "DOSSTOP" if action.upper() in ("OFF", "STOP") else "DOSSTART"
+        action_upper = action.strip().upper()
+        if action_upper in ("OFF", "STOP", "AUTO", "DOSSTOP"):
+            dos_action = "DOSSTOP"
+        elif action_upper in ("ON", "START", "DOSSTART"):
+            dos_action = "DOSSTART"
+        else:
+            # Never default to DOSSTART: an unexpected action must not
+            # start a chemical dosing run.
+            msg = f"Unsupported dosing action for {key}: {action}"
+            raise VioletPoolAPIError(msg)
+
         dos_duration = int(duration) if duration else 0
 
         form_data = {
@@ -1019,11 +1250,51 @@ class VioletPoolAPI:
             msg = f"Unknown dosing type: {dosing_type}"
             raise VioletPoolAPIError(msg)
 
+        # /triggerManualDosing requires an explicit runtime; duration <= 0
+        # stops a running manual dosing instead (documented behavior).
+        if duration <= 0:
+            return await self.set_switch_state(device_key, ACTION_OFF)
+
         return await self.set_switch_state(
             device_key,
             ACTION_ON,
             duration=duration,
         )
+
+    @staticmethod
+    def _normalize_pv_surplus_action(action: str) -> str:
+        """Normalize an action for the PVSURPLUS function.
+
+        Manual section 26.3 only documents ON and OFF for PVSURPLUS; there is
+        no AUTO mode (the getReadings PVSURPLUS state is 0/1/2 - off,
+        triggered by digital input, or triggered by HTTP).  Sending AUTO is
+        therefore mapped to OFF, which releases the HTTP trigger and returns
+        control to the configured digital input / controller logic.
+
+        Args:
+            action: The requested action.
+
+        Returns:
+            The spec-conform action (ON or OFF).
+
+        Raises:
+            VioletPoolAPIError: If the action cannot be mapped to ON or OFF.
+
+        """
+        normalized = (action or "").strip().upper()
+        if normalized == ACTION_AUTO:
+            _LOGGER.warning(
+                "PVSURPLUS does not support AUTO (manual section 26.3); "
+                "sending OFF to release the HTTP trigger instead",
+            )
+            return ACTION_OFF
+        if normalized not in (ACTION_ON, ACTION_OFF):
+            msg = (
+                f"Unsupported PVSURPLUS action '{action}': "
+                "manual section 26.3 only documents ON and OFF"
+            )
+            raise VioletPoolAPIError(msg)
+        return normalized
 
     async def set_pv_surplus(
         self,
@@ -1033,18 +1304,26 @@ class VioletPoolAPI:
     ) -> dict[str, Any]:
         """Enable or disable PV surplus mode.
 
+        Per manual section 26.3 the command format is
+        ``PVSURPLUS,{ON|OFF},{speed},0`` where the speed (1-3) is only
+        evaluated for variable-speed pumps.  If no speed is provided the
+        controller falls back to the speed configured in its GUI.
+
         Args:
             active: Whether to activate PV surplus mode.
-            pump_speed: An optional pump speed.
+            pump_speed: An optional pump speed (1-3).
 
         Returns:
             A dictionary with the command result.
 
         """
+        speed: int | None = None
+        if pump_speed is not None:
+            speed = max(1, min(3, int(pump_speed)))
         return await self.set_switch_state(
             "PVSURPLUS",
             ACTION_ON if active else ACTION_OFF,
-            last_value=pump_speed,
+            last_value=speed,
         )
 
     async def set_all_dmx_scenes(self, action: str) -> dict[str, Any]:
@@ -1068,6 +1347,45 @@ class VioletPoolAPI:
             raise VioletPoolAPIError(msg)
 
         return await self.set_switch_state("DMX_SCENE1", action)
+
+    async def set_cover_command(
+        self,
+        action: str,
+        *,
+        acknowledge_unsafe: bool = False,
+    ) -> dict[str, Any]:
+        """Send an open, close, or stop command to the pool cover.
+
+        Cover movement is a potentially hazardous operation (motorised cover,
+        risk of entrapment).  Callers must explicitly pass
+        ``acknowledge_unsafe=True`` to confirm they are aware of the risk and
+        have taken appropriate safety precautions.
+
+        Args:
+            action: ``"OPEN"``, ``"CLOSE"``, or ``"STOP"`` (case-insensitive).
+            acknowledge_unsafe: Must be ``True`` to allow the command.
+
+        Returns:
+            A dictionary with the command result.
+
+        Raises:
+            VioletUnsafeOperationError: If ``acknowledge_unsafe`` is ``False``.
+            VioletPoolAPIError: If ``action`` is not a known cover action.
+
+        """
+        if not acknowledge_unsafe:
+            msg = (
+                "Cover movement is a potentially unsafe operation. "
+                "Pass acknowledge_unsafe=True to confirm you are aware of the risk."
+            )
+            raise VioletUnsafeOperationError(msg)
+
+        cover_key = COVER_FUNCTIONS.get(action.strip().upper())
+        if not cover_key:
+            msg = f"Unknown cover action '{action}'. Valid: {list(COVER_FUNCTIONS)}"
+            raise VioletPoolAPIError(msg)
+
+        return await self.set_switch_state(cover_key, ACTION_PUSH)
 
     async def set_light_color_pulse(self) -> dict[str, Any]:
         """Trigger the color pulse animation for the pool light.
@@ -1120,53 +1438,78 @@ class VioletPoolAPI:
 
         Args:
             climate_key: The climate key (HEATER or SOLAR).
-            temperature: The target temperature.
+            temperature: The target temperature in °C.
 
         Returns:
             A dictionary with the command result.
 
+        Raises:
+            VioletSetpointError: If ``temperature`` is outside the valid range
+                (5–45 °C for heater, 5–55 °C for solar).
+
         """
-        config_key = "SOLAR_maxtemp" if climate_key.upper() == "SOLAR" else f"{climate_key}_set_temp"
+        config_key = (
+            "SOLAR_maxtemp" if climate_key.upper() == "SOLAR" else f"{climate_key}_set_temp"
+        )
         return await self.set_target_value(config_key, float(temperature))
 
     async def set_ph_target(self, value: float) -> dict[str, Any]:
         """Update the pH setpoint.
 
         Args:
-            value: The new pH target value.
+            value: The new pH target value (valid range: 6.0–8.0).
 
         Returns:
             A dictionary with the command result.
 
+        Raises:
+            VioletSetpointError: If ``value`` is outside the valid range or
+                is not a finite number.
+
         """
+        validate_setpoint(TARGET_PH, float(value))
         return await self.set_target_value(TARGET_PH, float(value))
 
     async def set_orp_target(self, value: int) -> dict[str, Any]:
         """Update the ORP setpoint.
 
         Args:
-            value: The new ORP target value.
+            value: The new ORP target value in mV (valid range: 500–900).
 
         Returns:
             A dictionary with the command result.
 
+        Raises:
+            VioletSetpointError: If ``value`` is outside the valid range or
+                is not a finite number.
+
         """
+        validate_setpoint(TARGET_ORP, float(value))
         return await self.set_target_value(TARGET_ORP, int(value))
 
     async def set_min_chlorine_level(self, value: float) -> dict[str, Any]:
         """Update the minimum chlorine level.
 
         Args:
-            value: The new minimum chlorine level.
+            value: The new minimum chlorine level in mg/L (valid range: 0.0–5.0).
 
         Returns:
             A dictionary with the command result.
 
+        Raises:
+            VioletSetpointError: If ``value`` is outside the valid range or
+                is not a finite number.
+
         """
+        validate_setpoint(TARGET_MIN_CHLORINE, float(value))
         return await self.set_target_value(TARGET_MIN_CHLORINE, float(value))
 
     async def set_target_value(self, key: str, value: float) -> dict[str, Any]:
         """Send a generic target value update to the controller.
+
+        For known setpoint keys (see ``SETPOINT_RANGES``), validation is
+        performed automatically.  Call ``validate_setpoint()`` directly for
+        keys not covered by the convenience methods.
 
         Args:
             key: The target key.
@@ -1175,7 +1518,12 @@ class VioletPoolAPI:
         Returns:
             A dictionary with the command result.
 
+        Raises:
+            VioletSetpointError: If ``value`` is non-finite or outside a
+                known valid range for ``key``.
+
         """
+        validate_setpoint(key, float(value))
         return await self.set_config({key: value})
 
     async def set_dosing_parameters(
@@ -1218,10 +1566,7 @@ class VioletPoolAPI:
         """
         prefix = DOSING_CONFIG_PREFIX.get(dosing_type)
         if prefix is None:
-            msg = (
-                f"Unknown dosing type '{dosing_type}'. "
-                f"Valid: {list(DOSING_CONFIG_PREFIX)}"
-            )
+            msg = f"Unknown dosing type '{dosing_type}'. Valid: {list(DOSING_CONFIG_PREFIX)}"
             raise VioletPoolAPIError(msg)
 
         return await self.set_config({f"{prefix}_use": 1 if enabled else 0})
@@ -1242,15 +1587,13 @@ class VioletPoolAPI:
         """
         prefix = DOSING_CONFIG_PREFIX.get(dosing_type)
         if prefix is None:
-            msg = (
-                f"Unknown dosing type '{dosing_type}'. "
-                f"Valid: {list(DOSING_CONFIG_PREFIX)}"
-            )
+            msg = f"Unknown dosing type '{dosing_type}'. Valid: {list(DOSING_CONFIG_PREFIX)}"
             raise VioletPoolAPIError(msg)
 
         result = await self._request_json_dict(
             API_GET_CONFIG,
             query=f"{prefix}_use",
+            payload_name="getConfig",
         )
         return bool(int(result.get(f"{prefix}_use", 0)))
 
@@ -1319,7 +1662,8 @@ class VioletPoolAPI:
             subject: The SUBJECT field from the controller (optional fallback).
 
         Returns:
-            A dict with keys: code, severity, message, is_alarm, is_warning.
+            A dict with keys: code, severity, message, is_alarm, is_warning,
+            is_info, is_reminder.
 
         """
         code = str(error_code).strip().zfill(4)
@@ -1339,6 +1683,7 @@ class VioletPoolAPI:
             "is_alarm": severity == ERROR_SEVERITY_ALARM,
             "is_warning": severity == ERROR_SEVERITY_WARNING,
             "is_info": severity == ERROR_SEVERITY_INFO,
+            "is_reminder": severity == ERROR_SEVERITY_REMINDER,
         }
 
     @staticmethod
@@ -1421,9 +1766,459 @@ class VioletPoolAPI:
             SENSOR_ID, TYPE, TEXT, MAIL_STATE, etc.
 
         """
-        return await self._request(
+        return await self._request_json_dict(
             API_GET_NOTIFICATIONS,
             query="ALL",
+            payload_name="getNotifications",
+        )
+
+    async def reset_blocking(self) -> dict[str, Any]:
+        """Clear fault-induced blockings on the controller.
+
+        Clears the ``BLOCKED_BY_ESC`` flag raised by empty-canister alarms
+        and similar fault states so that dosing/control resumes after the
+        underlying issue has been fixed (e.g. after refilling a canister).
+        Equivalent to clicking "Reset" on the controller's web UI error page.
+
+        Returns:
+            A dict with the command result (``success`` flag and ``response``
+            text from the controller).
+
+        Raises:
+            VioletPoolAPIError: If the API request fails.
+
+        """
+        body = await self._request(
+            API_RESET_BLOCKING,
+            method="GET",
+            priority=API_PRIORITY_CRITICAL,
+        )
+        return self._command_result(body)
+
+    async def set_can_amount(
+        self,
+        dosing_key: str,
+        amount_ml: int,
+        *,
+        reset: bool = False,
+    ) -> dict[str, Any]:
+        """Set or reset the canister fill level for a dosing channel.
+
+        Used after refilling or replacing a chemical canister so the
+        controller's remaining-range calculation is accurate.
+
+        Args:
+            dosing_key: One of ``DOS_1_CL``, ``DOS_2_ELO``, ``DOS_4_PHM``,
+                ``DOS_5_PHP``, ``DOS_6_FLOC``.  H2O2 shares ``DOS_1_CL``
+                with Chlorine and is not a separate key here.
+            amount_ml: New fill level in millilitres (must be > 0).
+            reset: When True, also resets the daily-dosing counter and the
+                "last can reset" timestamp (firmware action ``RESET``).
+                When False (default), only adjusts the fill level
+                (firmware action ``ADJUST``) and leaves the daily counter
+                untouched.
+
+        Returns:
+            A dict with the command result.
+
+        Raises:
+            VioletPoolAPIError: If ``dosing_key`` is unknown or the API
+                request fails.
+            ValueError: If ``amount_ml`` is not positive.
+
+        """
+        cid = DOSING_CANISTER_ID.get(dosing_key)
+        if cid is None:
+            msg = (
+                f"Unknown dosing key for set_can_amount: {dosing_key!r}. "
+                f"Expected one of: {sorted(DOSING_CANISTER_ID)}"
+            )
+            raise VioletPoolAPIError(msg)
+        if amount_ml <= 0:
+            raise ValueError(f"amount_ml must be > 0, got {amount_ml}")
+
+        action = "RESET" if reset else "ADJUST"
+        form_data = {
+            "action": action,
+            "which": dosing_key,
+            "amount": str(int(amount_ml)),
+            "cid": str(cid),
+        }
+        body = await self._request(
+            API_SET_CAN_AMOUNT,
+            method="POST",
+            data=form_data,
+            priority=API_PRIORITY_CRITICAL,
+        )
+        return self._command_result(body)
+
+    async def set_system_service(
+        self,
+        service: str,
+        enabled: bool,
+    ) -> dict[str, Any]:
+        """Enable or disable a controller-side system service.
+
+        The controller exposes per-service ``/enable*`` and ``/disable*``
+        endpoints (FTP, Samba, SSH, Shairport/AirPlay, Homebridge/HomeKit,
+        Alexa, cloud tunnel, support tunnel).  State can be queried via
+        :meth:`get_system_services`.
+
+        Args:
+            service: One of the keys in
+                :data:`~violet_poolcontroller_api.const_api.SYSTEM_SERVICES`
+                (``"ftp"``, ``"samba"``, ``"ssh"``, ``"shairport"``,
+                ``"homebridge"``, ``"alexa"``, ``"tunnel"``,
+                ``"support_tunnel"``).
+            enabled: True to enable, False to disable.
+
+        Returns:
+            A dict with the command result.
+
+        Raises:
+            VioletPoolAPIError: If ``service`` is unknown or the request fails.
+
+        """
+        info = SYSTEM_SERVICES.get(service)
+        if info is None:
+            msg = (
+                f"Unknown system service: {service!r}. "
+                f"Expected one of: {sorted(SYSTEM_SERVICES)}"
+            )
+            raise VioletPoolAPIError(msg)
+
+        endpoint = info["enable_endpoint"] if enabled else info["disable_endpoint"]
+        body = await self._request(
+            endpoint,
+            method="GET",
+            priority=API_PRIORITY_CRITICAL,
+        )
+        return self._command_result(body)
+
+    async def get_system_services(self) -> dict[str, bool]:
+        """Return the live state of all controller-side system services.
+
+        Wraps ``GET /getServiceStates`` and normalises each value to a
+        boolean.  Services whose state is not reported by the controller
+        (currently only Alexa) are absent from the returned dict.
+
+        Returns:
+            A dict mapping service key (``"ftp"``, ``"samba"``, ...) to a
+            boolean enabled state.
+
+        Raises:
+            VioletPoolAPIError: If the request fails or the payload is
+                missing the expected keys.
+
+        """
+        raw = await self._request_json_dict(
+            API_GET_SERVICE_STATES,
+            payload_name="getServiceStates",
+        )
+
+        result: dict[str, bool] = {}
+        for service, info in SYSTEM_SERVICES.items():
+            state_key = info.get("state_key", "")
+            if not state_key:
+                continue
+            if state_key in raw:
+                result[service] = bool(int(raw[state_key]))
+        return result
+
+    # ------------------------------------------------------------------
+    # OmniTronic multi-port valve + RS485 pump + live trace
+    # ------------------------------------------------------------------
+
+    async def set_omni_position(self, position: int) -> dict[str, Any]:
+        """Drive the OmniTronic multi-port valve to a fixed position.
+
+        Sends ``setFunctionManually?OMNI,OMNI_DC<N>``.  The controller
+        physically rotates the valve; the pump and dependent outputs
+        (heater/solar/dosing) are blocked with priority 5 while the valve
+        is moving.  Typical change-over is ~3 s per step.
+
+        Position 0 ("Filtration") has a special meaning: it also clears the
+        BACKWASH_RULE and releases any manual override, returning the
+        controller to automatic mode.  Use it after a manual backwash or
+        after positioning the valve at any other port.
+
+        Args:
+            position: Valve position (0-5).  0=Filtration/AUTO,
+                1-5=other physical ports (backwash, rinse, waste, ... –
+                exact meaning depends on the valve's plumbing).
+
+        Returns:
+            A dict with the command result.
+
+        Raises:
+            VioletPoolAPIError: If ``position`` is out of range or the
+                request fails.
+
+        """
+        if position not in OMNI_POSITIONS:
+            msg = (
+                f"Invalid OmniTronic position: {position!r}. "
+                f"Must be one of {sorted(OMNI_POSITIONS)}"
+            )
+            raise VioletPoolAPIError(msg)
+        state_token = OMNI_POSITIONS[position]
+        url = f"{API_SET_FUNCTION_MANUALLY}?OMNI,{state_token},0,0"
+        body = await self._request(
+            url,
+            method="GET",
+            priority=API_PRIORITY_CRITICAL,
+        )
+        return self._command_result(body)
+
+    async def get_rs485_pump_data(
+        self,
+        pump_name: str,
+    ) -> dict[str, Any]:
+        """Return live data and register config for an RS485 pump.
+
+        Wraps ``GET /getRS485PumpData?<pumpName>``.  The response combines
+        the static register map from ``config/RS485_PUMP/<NAME>.json`` with
+        live values: pump power consumption (Watts), flow rate (depending on
+        the configured flow monitor), pump-blocked flag, BACKWASH_STEP and
+        a SLAVE_PRESENT flag.
+
+        Args:
+            pump_name: Pump model identifier (e.g. ``"BADU_ECO_DRIVE_II"``).
+                See :data:`~violet_poolcontroller_api.const_api.RS485_PUMP_NAMES`
+                for the known names.
+
+        Returns:
+            The full JSON dict returned by the controller.
+
+        Raises:
+            VioletPoolAPIError: If ``pump_name`` is unknown or the request
+                fails.
+
+        """
+        if pump_name not in RS485_PUMP_NAMES:
+            msg = (
+                f"Unknown RS485 pump name: {pump_name!r}. "
+                f"Expected one of {RS485_PUMP_NAMES}"
+            )
+            raise VioletPoolAPIError(msg)
+        url = f"{API_GET_RS485_PUMP_DATA}?{pump_name}"
+        body = await self._request(
+            url,
+            method="GET",
+            priority=API_PRIORITY_NORMAL,
             expect_json=True,
+        )
+        if isinstance(body, dict):
+            return body
+        return {"raw": body}
+
+    async def set_rs485_live(
+        self,
+        pump_name: str,
+        slave_id: int,
+        mode: str,
+        level: float,
+    ) -> str:
+        """Send live control data to an RS485 variable-speed pump.
+
+        Wraps ``GET /setRS485Live?<pumpName>,<slaveID>,<mode>,<level>``.
+        While live mode is active the controller blocks its normal RS485
+        polling for ~3 s after each call – call :meth:`end_rs485_live`
+        when you're done to release the bus.
+
+        Args:
+            pump_name: Pump model identifier (see
+                :data:`~violet_poolcontroller_api.const_api.RS485_PUMP_NAMES`).
+            slave_id: Modbus slave ID of the pump (usually 1).
+            mode: Control mode – one of ``"rpm"``, ``"pwr"`` or ``"hz"``.
+                Which modes are valid depends on the pump model (most BADU
+                pumps expose only ``"hz"`` – check
+                ``MOTIONCONTROLMODE_VALIDMODES`` in the pump config).
+            level: Target value (RPM, kW, or Hz).  Clamped to the pump's
+                ``SETTARGET_*_VALIDMIN`` / ``VALIDMAX`` on the controller.
+
+        Returns:
+            The register/value string the controller forwards to the pump's
+            modbus interface (e.g. ``"1|0,0|2,4500"``).
+
+        Raises:
+            VioletPoolAPIError: If arguments are invalid or the request fails.
+
+        """
+        if pump_name not in RS485_PUMP_NAMES:
+            msg = (
+                f"Unknown RS485 pump name: {pump_name!r}. "
+                f"Expected one of {RS485_PUMP_NAMES}"
+            )
+            raise VioletPoolAPIError(msg)
+        if mode.lower() not in RS485_PUMP_MODES:
+            msg = (
+                f"Invalid RS485 mode: {mode!r}. "
+                f"Expected one of {RS485_PUMP_MODES}"
+            )
+            raise VioletPoolAPIError(msg)
+        if slave_id < 1 or slave_id > 247:
+            raise ValueError(f"slave_id must be 1-247, got {slave_id}")
+
+        url = (
+            f"{API_SET_RS485_LIVE}?{pump_name},{int(slave_id)},"
+            f"{mode.lower()},{level}"
+        )
+        body = await self._request(
+            url,
+            method="GET",
+            priority=API_PRIORITY_CRITICAL,
+        )
+        text = str(body) if body is not None else ""
+        # Firmware JSON-encodes the response (res.write(JSON.stringify(...))),
+        # so strip surrounding quotes for the common single-string case.
+        if text.startswith('"') and text.endswith('"'):
+            return text[1:-1]
+        return text
+
+    async def end_rs485_live(self) -> str:
+        """End an RS485 live-control session and release the bus.
+
+        Sends ``GET /setRS485Live?DONE``.  Always call this when finished
+        with :meth:`set_rs485_live`, otherwise the controller keeps the
+        normal RS485 polling paused for ~3 s after each call.
+
+        Returns:
+            The response string from the controller (usually ``"DONE"``).
+
+        """
+        body = await self._request(
+            f"{API_SET_RS485_LIVE}?DONE",
+            method="GET",
+            priority=API_PRIORITY_CRITICAL,
+        )
+        text = str(body) if body is not None else ""
+        if text.startswith('"') and text.endswith('"'):
+            return text[1:-1]
+        return text
+
+    async def get_live_trace(self) -> dict[str, str]:
+        """Return a single-row snapshot of every controller reading.
+
+        Wraps ``GET /getLiveTrace``.  The controller returns a 3-line
+        text/plain body (header row, units row, values row) with
+        semicolon-separated fields and German decimal commas.  This method
+        splits the rows and zips header→value into a dict (parsing values
+        as ``float`` when possible, falling back to the raw string).
+
+        Useful for ad-hoc troubleshooting dashboards – the controller does
+        not document this endpoint as stable, so prefer the typed
+        :meth:`get_readings` for production use.
+
+        Returns:
+            A dict mapping the header field names to their current values.
+
+        Raises:
+            VioletPoolAPIError: If the request fails or the payload is
+                malformed.
+
+        """
+        body = await self._request(
+            API_GET_LIVE_TRACE,
+            method="GET",
             priority=API_PRIORITY_NORMAL,
         )
+        text = str(body) if body is not None else ""
+        lines = text.splitlines()
+        if len(lines) < 3:
+            msg = f"Malformed getLiveTrace payload: expected 3 lines, got {len(lines)}"
+            raise VioletPoolAPIError(msg)
+        header = lines[0].split(";")
+        values = lines[2].split(";")
+        result: dict[str, str] = {}
+        for key, raw_value in zip(header, values, strict=False):
+            key = key.strip()
+            if not key:
+                continue
+            result[key] = raw_value.replace(",", ".").strip()
+        return result
+
+    async def init_update(self) -> str:
+        """Trigger firmware update installation on the controller.
+
+        The controller downloads and installs the update, then restarts
+        (takes ~30 seconds). Returns "STARTING" on success.
+
+        Returns:
+            Response string from the controller (e.g. "STARTING").
+
+        Raises:
+            VioletPoolAPIError: If the API call fails or auth is rejected.
+
+        """
+        resp = await self._request(
+            API_INIT_UPDATE,
+            method="GET",
+            priority=API_PRIORITY_CRITICAL,
+        )
+        return str(resp).strip() if resp else ""
+
+    async def get_update_state(self) -> str:
+        """Fetch the current firmware update progress log.
+
+        The controller writes progress to /home/violet/log/update.log
+        during an active update. Returns "STANDBY" when no update is running.
+
+        Returns:
+            Raw update log string or "STANDBY".
+
+        Raises:
+            VioletPoolAPIError: If the API call fails.
+
+        """
+        resp = await self._request(
+            API_GET_UPDATE_STATE,
+            method="GET",
+            priority=API_PRIORITY_NORMAL,
+        )
+        return str(resp).strip() if resp else "STANDBY"
+
+    async def get_update_history(self) -> str:
+        """Fetch formatted release notes for recent firmware versions.
+
+        The controller fetches notes from the PoolDigital update server and
+        returns them pre-formatted with HTML bullet points.
+
+        Returns:
+            HTML-formatted release notes string, or empty string on error.
+
+        Raises:
+            VioletPoolAPIError: If the API call fails.
+
+        """
+        resp = await self._request(
+            API_GET_UPDATE_HISTORY,
+            method="GET",
+            priority=API_PRIORITY_NORMAL,
+        )
+        return str(resp).strip() if resp else ""
+
+    async def get_output_runtimes(self) -> dict[str, Any]:
+        """Fetch output runtime statistics from the controller.
+
+        Returns a flat dict with runtime (HH:MM:SS format) and last-on/off
+        (ISO datetime strings) for all outputs: PUMP, SOLAR, HEATER, BACKWASH,
+        REFILL, LIGHT, ECO, all dosing outputs, OMNI_DC channels, and extension
+        relay channels.  Also includes CPU_UPTIME, LOAD_AVG, and version fields.
+
+        Returns:
+            Dict with runtime/timestamp strings for all outputs, or empty dict
+            on error.
+
+        Raises:
+            VioletPoolAPIError: If the API call fails.
+
+        """
+        resp = await self._request(
+            API_GET_OUTPUT_RUNTIMES,
+            method="GET",
+            priority=API_PRIORITY_NORMAL,
+        )
+        if isinstance(resp, dict):
+            return resp
+        return {}
