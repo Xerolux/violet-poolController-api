@@ -1,4 +1,4 @@
-# violet-poolController-api - API f├╝r Violet Pool Controller
+# violet-poolController-api - API für Violet Pool Controller
 # Copyright (C) 2024-2026  Xerolux
 #
 # This program is free software: you can redistribute it and/or modify
