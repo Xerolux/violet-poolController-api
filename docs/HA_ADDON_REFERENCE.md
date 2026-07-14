@@ -7,7 +7,7 @@
 
 - Base URL: http://{host}  (default port 80)
 - Auth: HTTP Basic Auth (username + password)
-- All requests must use aiohttp with `auth=aiohttp.BasicAuth(user, password)`
+- Send HTTP Basic Auth through an `Authorization` header; the API client handles this automatically.
 
 ## 2. CRITICAL API RULES
 
@@ -549,56 +549,49 @@ Key codes:
 ## 14. API LIBRARY USAGE EXAMPLES
 
 ```python
+import aiohttp
+
 from violet_poolcontroller_api import VioletPoolAPI
 
-api = VioletPoolAPI("192.168.178.55", "Basti", "sebi2634")
-await api.connect()
+async with aiohttp.ClientSession() as session:
+    api = VioletPoolAPI(
+        host="192.168.178.55",
+        session=session,
+        username="admin",
+        password="your_password",
+    )
 
-# Read all values
-readings = await api.get_readings("ALL")
-ph = readings["PH"]
-orp = readings["ORP"]
+    # Read all values
+    readings = await api.get_readings()
+    ph = readings.ph
+    orp = readings.orp
 
-# Switch pump on at speed 2 for 3600 seconds
-await api.set_switch_state("PUMP", "ON", duration=3600, last_value=2)
+    # Switch pump on at speed 2 for 3600 seconds
+    await api.set_switch_state("PUMP", "ON", duration=3600, last_value=2)
 
-# Set pH setpoint
-await api.set_ph_target(7.2)
+    # Set pH and ORP setpoints
+    await api.set_ph_target(7.2)
+    await api.set_orp_target(800)
 
-# Set ORP setpoint
-await api.set_orp_target(800)
+    # Enable/disable dosing
+    await api.set_dosage_enabled("Flockmittel", True)
+    await api.set_dosage_enabled("Flockmittel", False)
+    enabled = await api.is_dosage_enabled("Flockmittel")
 
-# Enable/disable dosing
-await api.set_dosage_enabled("Flockmittel", True)
-await api.set_dosage_enabled("Flockmittel", False)
-enabled = await api.is_dosage_enabled("Flockmittel")
+    # Start and stop manual dosing
+    await api.manual_dosing("Chlor", 60)
+    await api.set_switch_state("DOS_1_CL", "OFF")
 
-# Manual dosing (start, duration in seconds)
-await api.manual_dosing("Chlor", 60)
+    # Set climate targets
+    await api.set_device_temperature("SOLAR", 28)
+    await api.set_device_temperature("HEATER", 26)
 
-# Stop manual dosing (returns the channel to automatic mode)
-await api.set_switch_state("DOS_1_CL", "OFF")
+    # Generic config write
+    await api.set_config({"DOSAGE_chlorine_setpoint_orp": 825})
 
-# Set solar max temperature
-await api.set_device_temperature("SOLAR", 28)
-
-# Set heater target temperature
-await api.set_device_temperature("HEATER", 26)
-
-# Generic config write
-await api.set_config({"DOSAGE_chlorine_setpoint_orp": 825})
-
-# Get log entries
-log = await api.get_log("actions", page=0)
-for line in log["lines"]:
-    print(line)
-if log["has_more"]:
-    print("More pages available")
-
-# Get notifications
-notifications = await api.get_notifications()
-
-await api.disconnect()
+    # Get log entries and notifications
+    log = await api.get_log("actions", page=0)
+    notifications = await api.get_notifications()
 ```
 
 ## 15. PYTHON PACKAGE INFO
@@ -606,7 +599,7 @@ await api.disconnect()
 - Package: `violet-poolcontroller-api`
 - PyPI: https://pypi.org/project/violet-poolcontroller-api/
 - Repo: https://github.com/Xerolux/violet-poolController-api
-- Version: 0.0.23
+- Version: 0.0.35
 - License: AGPL-3.0
 - Python: >=3.12
 - Dependencies: aiohttp

@@ -75,6 +75,7 @@ class CircuitBreaker:
         self.last_failure_time = 0.0
         self.state = CircuitBreakerState.CLOSED
         self.half_open_start_time = 0.0
+        self._half_open_probe_in_flight = False
 
         # Protects mutable state from concurrent coroutine access (e.g., asyncio.gather)
         self._lock = asyncio.Lock()
@@ -101,49 +102,59 @@ class CircuitBreaker:
             CircuitBreakerOpenError: If circuit is open
 
         """
-        current_time = time.monotonic()
+        is_half_open_probe = False
 
-        # Check and update circuit state under lock to prevent races
         async with self._lock:
-            # Check if circuit should be closed from timeout
+            current_time = time.monotonic()
             if (
                 self.state == CircuitBreakerState.OPEN
                 and current_time - self.last_failure_time > self.timeout
             ):
                 self.state = CircuitBreakerState.HALF_OPEN
                 self.half_open_start_time = current_time
+                self._half_open_probe_in_flight = False
                 _LOGGER.info(
                     "Circuit breaker entering HALF_OPEN state for recovery test",
                 )
 
-            # Check if half-open timeout exceeded — but ONLY transition to CLOSED
-            # when a call actually succeeds (see the try block below).
-            if (
-                self.state == CircuitBreakerState.HALF_OPEN
-                and current_time - self.half_open_start_time > self.recovery_timeout
-            ):
-                _LOGGER.info(
-                    "Circuit breaker HALF_OPEN timeout — will close on next success"
-                )
-
-            # Fail fast if circuit is open
             if self.state == CircuitBreakerState.OPEN:
                 msg = "Circuit breaker is OPEN"
                 raise CircuitBreakerOpenError(msg)
 
+            if self.state == CircuitBreakerState.HALF_OPEN:
+                if self._half_open_probe_in_flight:
+                    msg = "Circuit breaker recovery probe is already running"
+                    raise CircuitBreakerOpenError(msg)
+                self._half_open_probe_in_flight = True
+                is_half_open_probe = True
+
         try:
-            # Execute the function outside the lock to avoid blocking other coroutines
-            result = await func(*args, **kwargs)
+            if is_half_open_probe and self.recovery_timeout > 0:
+                result = await asyncio.wait_for(
+                    func(*args, **kwargs),
+                    timeout=self.recovery_timeout,
+                )
+            else:
+                result = await func(*args, **kwargs)
 
         except self.ignored_exceptions:
-            # Deterministic errors pass through without counting as failures
+            if is_half_open_probe:
+                async with self._lock:
+                    self._half_open_probe_in_flight = False
             raise
 
-        except self.expected_exception as err:
+        except asyncio.CancelledError:
+            if is_half_open_probe:
+                async with self._lock:
+                    self._half_open_probe_in_flight = False
+            raise
+
+        except (self.expected_exception, TimeoutError) as err:
             async with self._lock:
                 failure_time = time.monotonic()
                 self.failure_count += 1
                 self.last_failure_time = failure_time
+                self._half_open_probe_in_flight = False
 
                 _LOGGER.debug(
                     "Circuit breaker failure %d/%d: %s",
@@ -152,30 +163,30 @@ class CircuitBreaker:
                     str(err),
                 )
 
-                # Open circuit if threshold reached
-                if self.failure_count >= self.failure_threshold:
+                if is_half_open_probe or self.failure_count >= self.failure_threshold:
                     self.state = CircuitBreakerState.OPEN
                     _LOGGER.warning(
                         "Circuit breaker OPENED due to %d failures",
                         self.failure_threshold,
                     )
 
-            # Re-raise the original exception
             raise
 
         except Exception:
-            # Unexpected exception - don't count for circuit breaker
+            if is_half_open_probe:
+                async with self._lock:
+                    self._half_open_probe_in_flight = False
             _LOGGER.exception("Unhandled exception escaped circuit breaker")
             raise
 
         else:
-            # Success: reset failure count and close circuit if half-open
             async with self._lock:
-                if self.state == CircuitBreakerState.HALF_OPEN:
+                if is_half_open_probe and self.state == CircuitBreakerState.HALF_OPEN:
                     self.state = CircuitBreakerState.CLOSED
                     self.failure_count = 0
+                    self._half_open_probe_in_flight = False
                     _LOGGER.info("Circuit breaker recovered from HALF_OPEN to CLOSED")
-                else:
+                elif self.state == CircuitBreakerState.CLOSED:
                     self.failure_count = 0
 
             return result
@@ -192,6 +203,7 @@ class CircuitBreaker:
             "recovery_timeout": self.recovery_timeout,
             "last_failure_time": self.last_failure_time,
             "half_open_start_time": self.half_open_start_time,
+            "half_open_probe_in_flight": self._half_open_probe_in_flight,
         }
 
     async def reset(self) -> None:
@@ -201,6 +213,7 @@ class CircuitBreaker:
             self.failure_count = 0
             self.last_failure_time = 0.0
             self.half_open_start_time = 0.0
+            self._half_open_probe_in_flight = False
         _LOGGER.info("Circuit breaker manually reset to CLOSED state")
 
 

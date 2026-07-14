@@ -7,7 +7,7 @@ Zunächst benötigst du eine `aiohttp.ClientSession` und die Zugangsdaten deines
 ```python
 import asyncio
 import aiohttp
-from violet_poolcontroller_api.api import VioletPoolAPI, VioletPoolAPIError
+from violet_poolcontroller_api import VioletPoolAPI, VioletPoolAPIError
 
 async def main():
     async with aiohttp.ClientSession() as session:
@@ -20,8 +20,13 @@ async def main():
             verify_ssl=True,
             timeout=10,              # Anfrage-Timeout in Sekunden
             max_retries=3,
-            dosing_standalone=False  # Auf True setzen fuer Dosier-Standalone-Konfigurationen
+            dosing_standalone=False, # Auf True setzen fuer Dosier-Standalone-Konfigurationen
+            rate_limiter=None,       # Optional explizit geteilter RateLimiter
         )
 
         # Jetzt koennen API-Methoden aufgerufen werden...
 ```
+
+Jeder Client verwendet standardmaessig einen eigenen Rate Limiter. Dieselbe
+`RateLimiter`-Instanz sollte nur uebergeben werden, wenn mehrere Clients bewusst
+ein gemeinsames Request-Budget teilen sollen.

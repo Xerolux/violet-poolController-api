@@ -1,5 +1,8 @@
 """Tests for violet_poolcontroller_api.circuit_breaker module."""
 
+import asyncio
+import time
+
 import pytest
 
 from violet_poolcontroller_api.circuit_breaker import (
@@ -137,3 +140,40 @@ class TestCircuitBreakerMetrics:
         await cb.reset()
         assert cb.state.name == "CLOSED"
         assert cb.failure_count == 0
+
+
+async def test_half_open_allows_only_one_recovery_probe() -> None:
+    cb = CircuitBreaker(failure_threshold=1, timeout=0, recovery_timeout=1)
+    cb.state = cb.state.OPEN
+    cb.last_failure_time = time.monotonic() - 1
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def probe() -> str:
+        started.set()
+        await release.wait()
+        return "ok"
+
+    first = asyncio.create_task(cb.call(probe))
+    await started.wait()
+    with pytest.raises(CircuitBreakerOpenError, match="probe"):
+        await cb.call(probe)
+    release.set()
+
+    assert await first == "ok"
+    assert cb.state.name == "CLOSED"
+
+
+async def test_half_open_probe_timeout_reopens_circuit() -> None:
+    cb = CircuitBreaker(failure_threshold=1, timeout=0, recovery_timeout=0.01)
+    cb.state = cb.state.OPEN
+    cb.last_failure_time = time.monotonic() - 1
+
+    async def probe() -> None:
+        await asyncio.sleep(1)
+
+    with pytest.raises(TimeoutError):
+        await cb.call(probe)
+
+    assert cb.state.name == "OPEN"
+    assert cb.get_stats()["half_open_probe_in_flight"] is False

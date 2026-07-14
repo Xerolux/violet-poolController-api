@@ -187,7 +187,7 @@ class InputSanitizer:
                 )
                 return max_value
 
-        except (ValueError, TypeError) as err:
+        except (ValueError, TypeError, OverflowError) as err:
             _LOGGER.warning(
                 "Ungültiger Integer-Wert '%s', verwende default %d: %s",
                 value,
@@ -221,6 +221,13 @@ class InputSanitizer:
         """
         try:
             float_value = float(value)
+            if not math.isfinite(float_value):
+                _LOGGER.warning(
+                    "Nicht-endlicher Float-Wert '%s', verwende default %.2f",
+                    value,
+                    default,
+                )
+                return default
 
             # Range-Validierung
             if min_value is not None and float_value < min_value:

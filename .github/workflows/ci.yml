@@ -7,7 +7,6 @@ on:
       - "violet_poolcontroller_api/**"
       - "tests/**"
       - "pyproject.toml"
-      - "setup.py"
       - ".github/scripts/**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
@@ -17,7 +16,6 @@ on:
       - "violet_poolcontroller_api/**"
       - "tests/**"
       - "pyproject.toml"
-      - "setup.py"
       - ".github/scripts/**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
@@ -50,11 +48,14 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install Ruff
-        run: python -m pip install ruff
+      - name: Install quality dependencies
+        run: python -m pip install -e ".[test]" ruff
 
       - name: Run lint checks
         run: python -m ruff check violet_poolcontroller_api tests .github/scripts
+
+      - name: Run type checks
+        run: python -m mypy violet_poolcontroller_api
 
   test:
     name: Test Python ${{ matrix.python-version }}

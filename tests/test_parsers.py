@@ -26,6 +26,8 @@ class TestParseRuntimeString:
     def test_invalid_runtime_string(self):
         """Invalid runtime strings produce a zero duration."""
         assert parse_runtime_string("invalid") == timedelta(0)
+        assert parse_runtime_string("5h trailing") == timedelta(0)
+        assert parse_runtime_string("prefix 5h") == timedelta(0)
         assert parse_runtime_string("") == timedelta(0)
 
 
@@ -61,6 +63,7 @@ class TestParseUptimeString:
     def test_invalid_uptime(self):
         """Invalid uptime strings produce a zero duration."""
         assert parse_uptime_string("invalid") == timedelta(0)
+        assert parse_uptime_string("5d trailing") == timedelta(0)
 
 
 class TestParseOptionalSeconds:
