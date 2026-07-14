@@ -17,7 +17,7 @@ permissions:
 jobs:
   dev-release:
     runs-on: ubuntu-latest
-    if: github.event.head_commit.message == '' || !startsWith(github.event.head_commit.message, 'chore: bump dev version')
+    if: "${{ github.event.head_commit.message == '' || !startsWith(github.event.head_commit.message, 'chore: bump dev version') }}"
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -129,20 +129,23 @@ jobs:
             COMMIT_COUNT=$(git rev-list --count HEAD)
           fi
 
-          NOTES="Auto pre-release from commit \`${SHORT_SHA}\`
+          NOTES=$(cat <<EOF | sed 's/^[[:space:]]*//'
+          Auto pre-release from commit \`${SHORT_SHA}\`
 
-**${COMMIT_MSG}**
+          **${COMMIT_MSG}**
 
-Commits since ${LAST_STABLE}: ${COMMIT_COUNT}
-SHA: \`${SHORT_SHA}\`
+          Commits since ${LAST_STABLE}: ${COMMIT_COUNT}
+          SHA: \`${SHORT_SHA}\`
 
-> This is an automated development pre-release.
-> It replaces any previous \`-dev.*\` pre-release for v${{ steps.version.outputs.dev_version }}.
+          > This is an automated development pre-release.
+          > It replaces any previous \`-dev.*\` pre-release for v${{ steps.version.outputs.dev_version }}.
 
-### Installation
-\`\`\`bash
-pip install violet-poolController-api==${{ steps.version.outputs.dev_version }}.dev0
-\`\`\`"
+          ### Installation
+          \`\`\`bash
+          pip install violet-poolController-api==${{ steps.version.outputs.dev_version }}.dev0
+          \`\`\`
+          EOF
+          )
 
           gh release create "${DEV_TAG}" \
             --prerelease \
