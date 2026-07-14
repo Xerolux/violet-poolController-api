@@ -129,10 +129,7 @@ jobs:
             COMMIT_COUNT=$(git rev-list --count HEAD)
           fi
 
-          gh release create "${DEV_TAG}" \
-            --prerelease \
-            --title "v${{ steps.version.outputs.dev_version }}-dev.${SHORT_SHA}" \
-            --notes "Auto pre-release from commit \`${SHORT_SHA}\`
+          NOTES="Auto pre-release from commit \`${SHORT_SHA}\`
 
 **${COMMIT_MSG}**
 
@@ -146,3 +143,8 @@ SHA: \`${SHORT_SHA}\`
 \`\`\`bash
 pip install violet-poolController-api==${{ steps.version.outputs.dev_version }}.dev0
 \`\`\`"
+
+          gh release create "${DEV_TAG}" \
+            --prerelease \
+            --title "v${{ steps.version.outputs.dev_version }}-dev.${SHORT_SHA}" \
+            --notes "${NOTES}"
