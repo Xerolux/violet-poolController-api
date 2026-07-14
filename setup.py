@@ -24,7 +24,7 @@ setup(
     ],
     extras_require={
         "test": [
-            "aioresponses>=0.7.8",
+            "aioresponses>=0.7.9",
             "pytest>=8.3",
             "pytest-asyncio>=0.24",
         ],
