@@ -42,6 +42,7 @@ Usage::
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator, Mapping
 from datetime import timedelta
 from functools import cached_property
@@ -70,9 +71,10 @@ def _opt_float(raw: Any) -> float | None:  # noqa: ANN401
     if raw is None:
         return None
     try:
-        return float(raw)
+        value = float(raw)
     except (ValueError, TypeError, OverflowError):
         return None
+    return value if math.isfinite(value) else None
 
 
 def _parse_output_state(raw: Any) -> OutputState | None:  # noqa: ANN401

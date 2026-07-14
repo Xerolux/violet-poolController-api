@@ -7,6 +7,7 @@ credentials, and verifies that authentication is enforced properly.
 from __future__ import annotations
 
 import asyncio
+import base64
 import socket
 import subprocess
 import sys
@@ -69,9 +70,14 @@ def mock_server() -> Iterator[subprocess.Popen[bytes]]:
         proc.wait(timeout=5)
 
 
-async def _request(url: str, auth: aiohttp.BasicAuth | None = None) -> tuple[int, str]:
+def _auth_headers(username: str, password: str) -> dict[str, str]:
+    token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
+
+
+async def _request(url: str, headers: dict[str, str] | None = None) -> tuple[int, str]:
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, auth=auth) as r:
+        async with session.get(url, headers=headers) as r:
             return r.status, await r.text()
 
 
@@ -97,7 +103,7 @@ async def test_raw_auth() -> None:
     print("=" * 60)
     status, body = await _request(
         f"http://{HOST}:{PORT}/getConfig",
-        auth=aiohttp.BasicAuth("admin", "wrongpassword"),
+        headers=_auth_headers("admin", "wrongpassword"),
     )
     assert status == 401, f"Expected 401, got {status}"
     print(f"  OK: status={status} body={body!r}")
@@ -108,7 +114,7 @@ async def test_raw_auth() -> None:
     print("=" * 60)
     status, body = await _request(
         f"http://{HOST}:{PORT}/getConfig",
-        auth=aiohttp.BasicAuth(USER, PASS),
+        headers=_auth_headers(USER, PASS),
     )
     assert status == 200, f"Expected 200, got {status}"
     print(f"  OK: status={status} body_len={len(body)}")

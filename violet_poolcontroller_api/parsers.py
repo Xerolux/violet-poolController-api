@@ -72,7 +72,7 @@ def parse_runtime_string(value: str) -> timedelta:
     Returns:
         ``timedelta`` representing the duration.
     """
-    m = _RE_RUNTIME.search(value.strip())
+    m = _RE_RUNTIME.fullmatch(value.strip())
     if not m:
         return timedelta(0)
     days, hours, minutes, seconds = (int(g) if g else 0 for g in m.groups())
@@ -108,7 +108,7 @@ def parse_uptime_string(value: str) -> timedelta:
     Returns:
         ``timedelta`` representing the uptime duration.
     """
-    m = _RE_UPTIME.search(value.strip())
+    m = _RE_UPTIME.fullmatch(value.strip())
     if not m:
         return timedelta(0)
     days, hours, minutes = (int(g) if g else 0 for g in m.groups())

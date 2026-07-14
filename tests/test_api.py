@@ -843,6 +843,32 @@ async def test_set_device_temperature_solar(
 
 
 @pytest.mark.asyncio
+async def test_set_device_temperature_normalizes_key(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    url = "http://192.168.1.100/setConfig"
+    mock_aioresponse.post(url, body="OK", status=200)
+
+    await api_client.set_device_temperature(" heater ", 28.0)
+
+    request = mock_aioresponse.requests[("POST", URL(url))][0]
+    assert request.kwargs["data"] == {"HEATER_set_temp": 28.0}
+
+
+@pytest.mark.asyncio
+async def test_set_device_temperature_rejects_unknown_key(api_client: VioletPoolAPI) -> None:
+    with pytest.raises(VioletPoolAPIError, match="Expected HEATER or SOLAR"):
+        await api_client.set_device_temperature("DOSAGE", 28.0)
+
+
+@pytest.mark.asyncio
+async def test_set_device_temperature_cannot_bypass_range(api_client: VioletPoolAPI) -> None:
+    with pytest.raises(VioletPoolAPIError, match="outside the valid range"):
+        await api_client.set_device_temperature("heater", 1000.0)
+
+
+@pytest.mark.asyncio
 async def test_set_ph_target(
     mock_aioresponse: aioresponses,
     api_client: VioletPoolAPI,
@@ -910,6 +936,20 @@ async def test_set_dosing_parameters(
     result = await api_client.set_dosing_parameters({"DOS_1_CL_DOSING_TIME": 30})
 
     assert result["success"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("raw_value", "expected"), [("1", True), ("1.0", True), ("0.0", False)])
+async def test_is_dosage_enabled_accepts_numeric_strings(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+    raw_value: str,
+    expected: bool,
+) -> None:
+    url = "http://192.168.1.100/getConfig?DOSAGE_phminus_use"
+    mock_aioresponse.get(url, payload={"DOSAGE_phminus_use": raw_value}, status=200)
+
+    assert await api_client.is_dosage_enabled("pH-") is expected
 
 
 @pytest.mark.asyncio
@@ -1557,6 +1597,40 @@ async def test_manual_dosing_unknown_type(api_client: VioletPoolAPI) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("duration", [0.5, 86401, float("nan"), float("inf")])
+async def test_dosing_start_rejects_unsafe_duration(
+    api_client: VioletPoolAPI,
+    duration: float,
+) -> None:
+    with pytest.raises(VioletPoolAPIError, match="Duration must be a whole number"):
+        await api_client.set_switch_state("DOS_1_CL", "ON", duration=duration)
+
+
+@pytest.mark.asyncio
+async def test_manual_dosing_post_is_not_retried(
+    mock_aioresponse: aioresponses,
+) -> None:
+    url = "http://192.168.1.100/triggerManualDosing"
+    mock_aioresponse.post(url, status=500, body="boom")
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(host="192.168.1.100", session=session, max_retries=3)
+        with pytest.raises(VioletPoolAPIError):
+            await api.manual_dosing("Chlor", 30)
+
+    assert len(mock_aioresponse.requests[("POST", URL(url))]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration", [-1, 0.5, 86401, float("nan")])
+async def test_switch_state_rejects_invalid_duration(
+    api_client: VioletPoolAPI,
+    duration: float,
+) -> None:
+    with pytest.raises(VioletPoolAPIError, match="Duration must be a whole number"):
+        await api_client.set_switch_state("PUMP", "ON", duration=duration)
+
+
+@pytest.mark.asyncio
 async def test_manual_dosing_stop(
     mock_aioresponse: aioresponses,
     api_client: VioletPoolAPI,
@@ -1728,6 +1802,51 @@ async def test_client_error_does_not_trip_circuit_breaker(
         pytest.skip("Lock held during stats collection")
     assert stats["failure_count"] == 0
     assert stats["state"].name == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_empty_get_readings_payload_is_flattened(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, payload={"getReadings": {}}, status=200)
+
+    readings = await api_client.get_readings()
+
+    assert dict(readings) == {}
+
+
+@pytest.mark.asyncio
+async def test_empty_standalone_payload_updates_mode(api_client: VioletPoolAPI) -> None:
+    result = api_client._flatten_getreadings_response({"getReadings": []})  # noqa: SLF001
+
+    assert result == {}
+    assert api_client.dosing_standalone is True
+
+
+@pytest.mark.asyncio
+async def test_clients_use_independent_rate_limiters() -> None:
+    async with aiohttp.ClientSession() as session:
+        first = VioletPoolAPI(host="192.168.1.100", session=session)
+        second = VioletPoolAPI(host="192.168.1.101", session=session)
+
+    assert first._rate_limiter is not second._rate_limiter  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_basic_auth_uses_authorization_header(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, payload={}, status=200)
+
+    await api_client.get_readings()
+
+    request = next(iter(mock_aioresponse.requests.values()))[0]
+    assert request.kwargs["headers"]["Authorization"].startswith("Basic ")
+    assert "auth" not in request.kwargs
 
 
 @pytest.mark.asyncio

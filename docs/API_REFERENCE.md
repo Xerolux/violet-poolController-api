@@ -35,12 +35,13 @@ async with aiohttp.ClientSession() as session:
         host="192.168.178.55",     # IP oder Hostname
         session=session,            # aiohttp Session (Pflicht)
         username="Basti",          # Optional: Basic Auth
-        password="sebi2634",       # Optional: Basic Auth
+        password="your_password", # Optional: Basic Auth
         use_ssl=False,             # HTTPS verwenden
         verify_ssl=True,           # SSL-Zertifikat pr├╝fen
         timeout=10,                # Request-Timeout in Sekunden
         max_retries=3,             # Max. Wiederholungen bei Fehlern
         dosing_standalone=False,   # True = nur Dosiermodul, kein Basismodul
+        rate_limiter=None,         # Optional: explizit geteilter RateLimiter
     )
 ```
 
@@ -1395,6 +1396,10 @@ ERRORCODE=0173&SUBJECT=Flockmittel%3A+Kanister+Restinhalt+niedrig
 | `API_RATE_LIMIT_WINDOW` | 1.0s | Window-Dauer |
 | `API_RATE_LIMIT_BURST` | 3 | Burst-Requests erlaubt |
 | `API_RATE_LIMIT_RETRY_AFTER` | 0.1s | Wartezeit bei Limit |
+
+Jede `VioletPoolAPI`-Instanz besitzt standardmaessig einen eigenen Token Bucket.
+Ein gemeinsames Limit kann bei Bedarf explizit ueber `rate_limiter=RateLimiter(...)`
+konfiguriert werden. Wartende Requests werden nach Prioritaet und anschliessend FIFO bedient.
 
 ### Priorit├ñten (niedriger = wichtiger)
 

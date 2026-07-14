@@ -103,10 +103,6 @@ async def _expect_error(
         _results.append(SmokeResult(name, "FAIL", f"Unexpected {type(exc).__name__}: {exc}", elapsed))
 
 
-def _skip(name: str, reason: str) -> None:
-    _results.append(SmokeResult(name, "SKIP", reason))
-
-
 async def run_all_tests(api: VioletPoolAPI) -> None:
     print()
     print("=" * 70)
@@ -184,6 +180,18 @@ async def run_all_tests(api: VioletPoolAPI) -> None:
         check=lambda r: "empty" if not r else None,
     )
 
+    await _run(
+        "get_log(actions)",
+        api.get_log("actions"),
+        check=lambda r: "missing lines" if "lines" not in r else None,
+    )
+
+    await _run(
+        "get_notifications",
+        api.get_notifications(),
+        check=lambda r: "unexpected payload" if not isinstance(r, dict) else None,
+    )
+
     # ── POST endpoints (config / commands) ──────────────────────────────
     print("[Config & Commands]")
 
@@ -227,6 +235,12 @@ async def run_all_tests(api: VioletPoolAPI) -> None:
         "set_dosage_enabled(pH-, True)",
         api.set_dosage_enabled("pH-", True),
         check=lambda r: "not success" if not r.get("success") else None,
+    )
+
+    await _run(
+        "is_dosage_enabled(pH-)",
+        api.is_dosage_enabled("pH-"),
+        check=lambda r: "expected enabled" if not r else None,
     )
 
     await _run(
@@ -490,14 +504,6 @@ async def run_all_tests(api: VioletPoolAPI) -> None:
         api.set_dosage_enabled("Unknown", True),
         error_contains="Unknown dosing type",
     )
-
-    # ── Skipped methods (use _api_request, not available in source) ─────
-    print("[Skipped - requires _api_request]")
-
-    _skip("get_log(actions)", "uses _api_request (not in source, only in installed package)")
-    _skip("get_notifications", "uses _api_request (not in source, only in installed package)")
-    _skip("is_dosage_enabled(pH-)", "uses _request_json_dict without payload_name param mismatch")
-
 
 async def _run_prop(api: VioletPoolAPI, prop: str) -> Any:
     return getattr(api, prop)

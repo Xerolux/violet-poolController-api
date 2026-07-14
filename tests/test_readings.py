@@ -1,5 +1,7 @@
 """Tests for violet_poolcontroller_api.readings module."""
 
+import math
+
 import pytest
 
 from violet_poolcontroller_api.readings import VioletReadings
@@ -116,6 +118,13 @@ class TestVioletReadingsEdgeCases:
         """Create readings from empty dict."""
         readings = VioletReadings({})
         assert len(readings) == 0
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_typed_readings_are_rejected(self, value):
+        readings = VioletReadings({"pH_value": value})
+
+        assert readings.ph is None
+        assert not math.isfinite(value)
 
     def test_large_dataset(self):
         """Handle large dataset."""

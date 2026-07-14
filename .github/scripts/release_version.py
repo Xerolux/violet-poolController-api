@@ -7,9 +7,7 @@ from pathlib import Path
 Version = tuple[int, int, int]
 
 PROJECT_FILE = Path("pyproject.toml")
-SETUP_FILE = Path("setup.py")
 PROJECT_VERSION_PATTERN = re.compile(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"')
-SETUP_VERSION_PATTERN = re.compile(r'(?m)^[ \t]*version="\d+\.\d+\.\d+(?:\.dev\d+)?"')
 STABLE_TAG_PATTERN = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 
 
@@ -49,15 +47,6 @@ def _replace_versions(version: str) -> None:
     if project_count != 1:
         raise SystemExit("Could not update pyproject.toml")
     PROJECT_FILE.write_text(project_content, encoding="utf-8")
-
-    setup_content, setup_count = SETUP_VERSION_PATTERN.subn(
-        f'    version="{version}"',
-        SETUP_FILE.read_text(encoding="utf-8"),
-        count=1,
-    )
-    if setup_count != 1:
-        raise SystemExit("Could not update setup.py")
-    SETUP_FILE.write_text(setup_content, encoding="utf-8")
 
 
 def _write_outputs(**values: str) -> None:
