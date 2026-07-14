@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="violet-poolController-api",
-    version="0.0.33",
+    version="0.0.35",
     author="Basti (Xerolux)",
     author_email="git@xerolux.de",
     description="Asynchronous Python client for the Violet Pool Controller.",
@@ -20,7 +20,7 @@ setup(
     ],
     python_requires=">=3.12",
     install_requires=[
-        "aiohttp>=3.11.0,<3.14",
+        "aiohttp>=3.11.0,<3.15",
     ],
     extras_require={
         "test": [

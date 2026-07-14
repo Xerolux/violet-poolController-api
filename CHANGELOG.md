@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.0.35
+
+### Fixes
+- **fix: `get_output_runtimes()` returned empty dict** — the method called `_request()` without `expect_json=True`, so the controller's JSON body was returned as a raw `str`. The `isinstance(resp, dict)` check therefore always failed, logging `Unexpected non-dict response for get_output_runtimes: str` and discarding all runtime/timestamp data (PUMP, SOLAR, HEATER, CPU_UPTIME, etc.). Switched to `_request_json_dict()` (same path used by `get_readings()`), which parses the JSON and enforces a dict response. Non-JSON or non-dict responses now raise `VioletPoolAPIError` instead of being silently swallowed.
+
+### Installation
+```bash
+pip install violet-poolController-api==0.0.35
+```
+
+---
+
+## v0.0.34
+
+### Fixes
+- **fix: widen aiohttp upper bound from `<3.14` to `<3.15`** — Home Assistant 2026.5.0 ships with aiohttp 3.14.1, which was excluded by the previous constraint `>=3.11.0,<3.14`. This caused pip to fail resolving `violet-poolController-api>=0.0.33` at HA startup. The new constraint `>=3.11.0,<3.15` allows aiohttp 3.14.x while remaining compatible with existing installations.
+
+### Installation
+```bash
+pip install violet-poolController-api==0.0.34
+```
+
+---
+
 ## v0.0.31
 
 ### Fixes

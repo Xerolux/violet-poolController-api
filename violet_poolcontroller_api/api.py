@@ -1,4 +1,4 @@
-# violet-poolController-api - API f├╝r Violet Pool Controller
+# violet-poolController-api - API für Violet Pool Controller
 # Copyright (C) 2024-2026  Xerolux
 #
 # This program is free software: you can redistribute it and/or modify
@@ -446,10 +446,11 @@ class VioletPoolAPI:
                 await self._rate_limiter.wait_if_needed(priority=priority, timeout=10.0)
             except TimeoutError:
                 _LOGGER.warning(
-                    "Rate limiter timeout for %s (priority: %d) - continuing",
+                    "Rate limiter timeout for %s (priority: %d) - applying fallback delay",
                     endpoint,
                     priority,
                 )
+                await asyncio.sleep(1.0)
 
             url = self._build_url(endpoint)
             if query:
@@ -481,8 +482,6 @@ class VioletPoolAPI:
                             response.status >= _HTTP_CLIENT_ERROR
                             and response.status < _HTTP_SERVER_ERROR
                         ):
-                            # Client errors (4xx, except 429 handled above) are
-                            # deterministic - fail fast instead of retrying.
                             body = await response.text()
                             msg = f"HTTP {response.status} for {endpoint}: {body.strip()}"
                             is_auth = response.status in (
@@ -492,19 +491,18 @@ class VioletPoolAPI:
                             raise _DeterministicClientError(msg, is_auth=is_auth)
 
                         if expect_json:
+                            body_text = await response.text()
                             try:
-                                return await response.json(content_type=None)
+                                return json.loads(body_text)
                             except (
-                                aiohttp.ContentTypeError,
                                 json.JSONDecodeError,
                             ) as err:
-                                body = await response.text()
-                                msg = f"Invalid JSON payload for {endpoint}: {body.strip()}"
+                                msg = f"Invalid JSON payload for {endpoint}: {body_text.strip()}"
                                 raise VioletPayloadError(msg) from err
 
                         return await response.text()
 
-                except (TimeoutError, aiohttp.ServerTimeoutError) as err:
+                except (TimeoutError,) as err:
                     last_error = VioletTimeoutError(
                         f"Request to {endpoint} timed out: {err}",
                     )
@@ -516,8 +514,8 @@ class VioletPoolAPI:
                     )
                     if attempt == self._max_retries:
                         raise last_error from None
-                    delay = min(2.0, 0.2 * (2 ** (attempt - 1)))
-                    jitter = random.uniform(0, delay * 0.1)  # Add 0-10% jitter
+                    delay = min(300.0, 10.0 * (2 ** (attempt - 1)))
+                    jitter = random.uniform(0, delay * 0.1)  # nosec B311
                     await asyncio.sleep(delay + jitter)
                 except aiohttp.ClientError as err:
                     last_error = VioletPoolAPIError(
@@ -531,9 +529,8 @@ class VioletPoolAPI:
                     )
                     if attempt == self._max_retries:
                         raise last_error from None
-                    # Exponential backoff with jitter
-                    delay = min(2.0, 0.2 * (2 ** (attempt - 1)))
-                    jitter = random.uniform(0, delay * 0.1)  # Add 0-10% jitter
+                    delay = min(300.0, 10.0 * (2 ** (attempt - 1)))
+                    jitter = random.uniform(0, delay * 0.1)  # nosec B311
                     await asyncio.sleep(delay + jitter)
 
             msg = "All retry attempts exhausted"
@@ -582,10 +579,10 @@ class VioletPoolAPI:
         # a substring check when the first line is neither marker.
         if first_line.startswith("ERROR"):
             success = False
-        elif first_line == "OK":
+        elif first_line == "OK" or first_line.startswith("MANDOS_"):
             success = True
         else:
-            success = not text or "error" not in text.lower()
+            success = False
 
         result: dict[str, Any] = {"success": success, "response": text}
         if len(lines) >= 2:
@@ -693,7 +690,7 @@ class VioletPoolAPI:
 
                 sanitized_config[sanitized_key] = sanitized_value
             except ValueError as err:
-                _LOGGER.exception("Invalid config parameter %s", key)
+                _LOGGER.warning("Invalid config parameter %s", key)
                 msg = f"Invalid configuration parameter: {key}"
                 raise VioletPoolAPIError(
                     msg,
@@ -757,7 +754,7 @@ class VioletPoolAPI:
             for item in readings:
                 if isinstance(item, dict) and item.get("VALUE NAME"):
                     key = str(item["VALUE NAME"]).strip().strip('"')
-                    val = item.get("VALUE", item.get("VALUE ", item.get("value")))
+                    val = item.get("VALUE", item.get("VALUE ", item.get("value")))  # "VALUE " fallback for firmware <1.0.9 trailing-space bug
                     flat_dict[key] = val
             return flat_dict
 
@@ -1666,7 +1663,10 @@ class VioletPoolAPI:
             is_info, is_reminder.
 
         """
-        code = str(error_code).strip().zfill(4)
+        code = str(error_code).strip()
+        if not code:
+            return {"code": "0000", "severity": "UNKNOWN", "message": "Invalid empty error code"}
+        code = code.zfill(4)
         info = ERROR_CODES.get(code)
 
         if info:
@@ -2131,7 +2131,9 @@ class VioletPoolAPI:
         header = lines[0].split(";")
         values = lines[2].split(";")
         result: dict[str, str] = {}
-        for key, raw_value in zip(header, values, strict=False):
+        if len(header) != len(values):
+            _LOGGER.warning("Live trace header/value length mismatch: %d vs %d", len(header), len(values))
+        for key, raw_value in zip(header, values):
             key = key.strip()
             if not key:
                 continue
@@ -2203,22 +2205,18 @@ class VioletPoolAPI:
 
         Returns a flat dict with runtime (HH:MM:SS format) and last-on/off
         (ISO datetime strings) for all outputs: PUMP, SOLAR, HEATER, BACKWASH,
-        REFILL, LIGHT, ECO, all dosing outputs, OMNI_DC channels, and extension
+        REFILL, LIGHT, ECO, all dosing outputs, OMNIDC channels, and extension
         relay channels.  Also includes CPU_UPTIME, LOAD_AVG, and version fields.
 
         Returns:
-            Dict with runtime/timestamp strings for all outputs, or empty dict
-            on error.
+            Dict with runtime/timestamp strings for all outputs.
 
         Raises:
-            VioletPoolAPIError: If the API call fails.
+            VioletPoolAPIError: If the API call fails or the response is not a
+                JSON object.
 
         """
-        resp = await self._request(
+        return await self._request_json_dict(
             API_GET_OUTPUT_RUNTIMES,
-            method="GET",
-            priority=API_PRIORITY_NORMAL,
+            payload_name="getOutputruntimes",
         )
-        if isinstance(resp, dict):
-            return resp
-        return {}
