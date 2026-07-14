@@ -1,173 +1,239 @@
-name: Create Release
+name: Release
 
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       version_mode:
-        description: "Version mode"
+        description: Version mode
         required: true
         type: choice
         options:
           - auto-patch
           - auto-minor
+          - auto-major
           - custom
         default: auto-patch
       custom_version:
-        description: "Custom version (only used when mode = custom, e.g. 1.2.3)"
+        description: Custom version when mode is custom, for example 1.2.3
         required: false
         type: string
         default: ""
       changelog:
-        description: "Changelog / Release notes (optional)"
+        description: Optional notes prepended to the generated release notes
         required: false
         type: string
         default: ""
+  release:
+    types: [published]
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
-  release:
+  dev-release:
+    name: Publish development pre-release
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: development-release
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Determine development version
+        id: version
+        run: >-
+          python .github/scripts/release_version.py dev
+          --run-number "${{ github.run_number }}"
+
+      - name: Build and validate distributions
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Replace development pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEV_TAG: ${{ steps.version.outputs.dev_tag }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          while IFS= read -r old_tag; do
+            [ -z "$old_tag" ] && continue
+            gh release delete "$old_tag" --yes --cleanup-tag
+          done < <(
+            gh release list --limit 100 --json tagName,isPrerelease \
+              --jq '.[] | select(.isPrerelease and (.tagName | contains("-dev."))) | .tagName'
+          )
+
+          wheel=$(find dist -maxdepth 1 -name "*.whl" -printf "%f\n" -quit)
+          notes=$(cat <<EOF
+          Automated development build from commit ${HEAD_SHA}.
+
+          Install the wheel directly from this pre-release:
+
+          \`\`\`bash
+          pip install "https://github.com/${GITHUB_REPOSITORY}/releases/download/${DEV_TAG}/${wheel}"
+          \`\`\`
+          EOF
+          )
+
+          args=(
+            --prerelease
+            --target "$HEAD_SHA"
+            --title "${DEV_TAG}"
+            --notes "$notes"
+            --generate-notes
+          )
+          if [ -n "$PREVIOUS_TAG" ]; then
+            args+=(--notes-start-tag "$PREVIOUS_TAG")
+          fi
+          gh release create "$DEV_TAG" dist/* "${args[@]}"
+
+  prepare-stable:
+    name: Prepare stable release draft
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    concurrency:
+      group: stable-release
+      cancel-in-progress: false
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      VERSION_MODE: ${{ inputs.version_mode }}
+      CUSTOM_VERSION: ${{ inputs.custom_version }}
+      RELEASE_NOTES: ${{ inputs.changelog }}
+
+    steps:
+      - name: Checkout selected revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Determine and apply release version
+        id: version
+        run: >-
+          python .github/scripts/release_version.py stable
+          --mode "$VERSION_MODE"
+          --custom "$CUSTOM_VERSION"
+
+      - name: Install build tools
+        run: python -m pip install build ruff twine ".[test]"
+
+      - name: Run release checks
+        run: |
+          python -m ruff check violet_poolcontroller_api tests .github/scripts
+          python -m pytest -q tests
+          smoke_output=$(python tests/test_api_smoke.py --user admin --password secret)
+          printf '%s\n' "$smoke_output"
+          grep -q "FAIL: 0" <<< "$smoke_output"
+          python -m build
+          python -m twine check dist/*
+          git diff --check
+
+      - name: Commit and tag release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml setup.py
+          git commit -m "chore: release ${TAG}"
+          git tag --annotate "$TAG" --message "$TAG"
+          git push --atomic origin HEAD:main "$TAG"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
+        run: |
+          args=(--draft --verify-tag --title "$TAG" --generate-notes)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            args+=(--notes-start-tag "$PREVIOUS_TAG")
+          fi
+          if [ -n "$RELEASE_NOTES" ]; then
+            args+=(--notes "$RELEASE_NOTES")
+          fi
+          gh release create "$TAG" dist/* "${args[@]}"
+
+  publish-pypi:
+    name: Publish stable release to PyPI
+    if: github.event_name == 'release' && github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     environment:
       name: pypi
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout release tag
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.x"
+          python-version: "3.14"
 
-      - name: Determine next version
-        id: version
-        run: |
-          import re, sys, subprocess, os
-
-          mode = "${{ github.event.inputs.version_mode }}"
-          custom = "${{ github.event.inputs.custom_version }}".strip()
-
-          # Read current version from pyproject.toml
-          with open("pyproject.toml") as f:
-              content = f.read()
-          m = re.search(r'version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', content)
-          if not m:
-              print("ERROR: cannot parse version from pyproject.toml")
-              sys.exit(1)
-
-          major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
-
-          if mode == "custom":
-              if not custom:
-                  print("ERROR: custom_version is empty")
-                  sys.exit(1)
-              if not re.match(r"^\d+\.\d+\.\d+$", custom):
-                  print(f"ERROR: invalid version format: {custom}")
-                  sys.exit(1)
-              new_version = custom
-          elif mode == "auto-minor":
-              new_version = f"{major}.{minor + 1}.0"
-          else:
-              new_version = f"{major}.{minor}.{patch + 1}"
-
-          # Get last tag for changelog
-          result = subprocess.run(
-              ["git", "describe", "--tags", "--abbrev=0"],
-              capture_output=True, text=True
-          )
-          last_tag = result.stdout.strip() if result.returncode == 0 else ""
-
-          commits = ""
-          if last_tag:
-              result = subprocess.run(
-                  ["git", "log", "--oneline", f"{last_tag}..HEAD"],
-                  capture_output=True, text=True
-              )
-              commits = result.stdout.strip()
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              print(f"version={new_version}", file=out)
-              print(f"last_tag={last_tag}", file=out)
-
-          # Write commit log to file for later use
-          with open("/tmp/commit_log.txt", "w") as f:
-              f.write(commits)
-
-        shell: python {0}
-
-      - name: Bump version in pyproject.toml and setup.py
-        run: |
-          NEW="${{ steps.version.outputs.version }}"
-
-          sed -i "s/version = \".*\"/version = \"${NEW}\"/" pyproject.toml
-          sed -i "s/version=\".*\"/version=\"${NEW}\"/" setup.py
-
-          echo "Bumped to ${NEW}"
-          grep "version" pyproject.toml
-          grep "version" setup.py
-
-      - name: Build changelog
-        id: changelog
-        run: |
-          NEW="${{ steps.version.outputs.version }}"
-          LAST="${{ steps.version.outputs.last_tag }}"
-          USER_INPUT="${{ github.event.inputs.changelog }}"
-
-          COMMIT_LOG=$(cat /tmp/commit_log.txt)
-
-          BODY="## v${NEW}\n\n"
-
-          if [ -n "$USER_INPUT" ]; then
-            BODY+="${USER_INPUT}\n\n"
-          fi
-
-          if [ -n "$COMMIT_LOG" ]; then
-            BODY+="### Commits since ${LAST}\n\n"
-            while IFS= read -r line; do
-              BODY+="- ${line}\n"
-            done <<< "$COMMIT_LOG"
-            BODY+="\n"
-          fi
-
-          BODY+="### Installation\n\`\`\`bash\npip install violet-poolController-api==${NEW}\n\`\`\`\n"
-
-          # Write to file for release notes
-          echo -e "$BODY" > RELEASE_NOTES_v${NEW}.md
-          echo "file=RELEASE_NOTES_v${NEW}.md" >> "$GITHUB_OUTPUT"
-
-      - name: Commit, tag and push
-        run: |
-          NEW="${{ steps.version.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml setup.py RELEASE_NOTES_v${NEW}.md
-          git commit -m "chore: bump version to ${NEW}"
-          git tag v${NEW}
-          git push origin main --tags
-
-      - name: Create GitHub Release
+      - name: Download and validate release distributions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          NEW="${{ steps.version.outputs.version }}"
-          NOTES_FILE="${{ steps.changelog.outputs.file }}"
-          gh release create v${NEW} \
-            --title "v${NEW}" \
-            --notes-file "${NOTES_FILE}" \
-            --latest
+          mkdir dist
+          gh release download "$TAG" --dir dist --pattern "*.whl" --pattern "*.tar.gz"
+          python -m pip install twine
+          python -m twine check dist/*
+          python - <<'PY'
+          import re
+          import os
+          from pathlib import Path
 
-      - name: Build package
-        run: |
-          python -m pip install build
-          python -m build
+          content = Path("pyproject.toml").read_text(encoding="utf-8")
+          match = re.search(r'(?m)^version\s*=\s*"(\d+\.\d+\.\d+)"', content)
+          if match is None or f"v{match.group(1)}" != os.environ["TAG"]:
+              raise SystemExit("Release tag does not match pyproject.toml")
+          PY
 
-      - name: Publish to PyPI
+      - name: Publish distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI }}
