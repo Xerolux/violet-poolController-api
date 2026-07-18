@@ -462,6 +462,9 @@ async def handle_set_function_manually(request: web.Request) -> web.Response:
     if not query:
         return web.Response(text="ERROR\nMissing query parameter")
 
+    if query.startswith("OMNI,"):
+        return await handle_set_omni_position(request)
+
     parts = query.split(",")
     key = parts[0]
     action = parts[1] if len(parts) > 1 else "ON"
@@ -737,11 +740,12 @@ async def handle_get_service_states(request: web.Request) -> web.Response:
 
 # OmniTronic multi-port valve state — driven by /setFunctionManually?OMNI,OMNI_DC<N>.
 async def handle_set_omni_position(request: web.Request) -> web.Response:
-    """GET /setFunctionManually?OMNI,OMNI_DC<N> — drive the multi-port valve."""
-    _log_request(request)
-    await _maybe_delay()
-    query = request.url.query.get("query", "") or request.url.path_qs.split("?", 1)[-1]
-    # Parse "OMNI,OMNI_DC<N>,0,0"
+    """GET /setFunctionManually?OMNI,OMNI_DC<N> — drive the multi-port valve.
+
+    Called from ``handle_set_function_manually`` once the OMNI prefix is
+    detected, so request logging and delay have already been applied.
+    """
+    query = request.query_string
     parts = query.split(",")
     if len(parts) < 2 or parts[0] != "OMNI":
         return web.Response(text="ERROR\nINVALID_QUERY", status=400)
@@ -932,7 +936,7 @@ async def auth_middleware(
         try:
             decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
             username, password = decoded.split(":", 1)
-        except (Exception):
+        except Exception:
             _LOGGER.warning("AUTH REJECT: malformed Basic auth from %s", request.remote)
             return web.Response(status=401, text="Unauthorized")
 

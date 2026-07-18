@@ -527,7 +527,7 @@ async def test_ext1_readings_filtered_when_not_detected(mock_aioresponse, api_cl
         payload={
             "getReadings": {
                 "PUMPSTATE": "2",
-                # No SYSTEM_ext1module_alive_count ÔåÆ module not connected
+                # No SYSTEM_ext1module_alive_count → module not connected
                 "EXT1_1": 0,
                 "EXT1_2": 0,
             }
@@ -1900,3 +1900,152 @@ def test_state_translation_language_switch() -> None:
 
     with pytest.raises(ValueError, match="Unsupported language"):
         set_state_translation_language("fr")
+
+
+@pytest.mark.asyncio
+async def test_set_config_preserves_int_values(
+    api_client: VioletPoolAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Integer config values must be sent as integers, not coerced to float.
+
+    Regression for v0.0.36: ``InputSanitizer.sanitize_numeric`` returns a
+    float, so an integer flag like ``1`` became ``1.0`` on the wire. The
+    controller firmware expects integer flags (e.g. ``DOS_*_use``).
+    """
+    captured: dict[str, object] = {}
+
+    async def fake_request(endpoint: str, **kwargs: Any) -> str:  # noqa: ANN401
+        captured["data"] = kwargs.get("data")
+        return "OK"
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    await api_client.set_config({"FLAG_enabled": 1, "FLAG_disabled": 0, "ph_set": 7.4})
+
+    data = captured["data"]
+    assert data == {"FLAG_enabled": 1, "FLAG_disabled": 0, "ph_set": 7.4}
+    assert isinstance(data["FLAG_enabled"], int)
+    assert isinstance(data["ph_set"], float)
+
+
+@pytest.mark.asyncio
+async def test_set_config_preserves_bool_as_int_flag(
+    api_client: VioletPoolAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Booleans are sent as 0/1 integer flags (bool is an int subclass)."""
+    captured: dict[str, object] = {}
+
+    async def fake_request(endpoint: str, **kwargs: Any) -> str:  # noqa: ANN401
+        captured["data"] = kwargs.get("data")
+        return "OK"
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    await api_client.set_config({"DOS_1_use": True, "DOS_2_use": False})
+
+    data = captured["data"]
+    assert data == {"DOS_1_use": 1, "DOS_2_use": 0}
+
+
+@pytest.mark.asyncio
+async def test_set_config_not_retried_on_server_error(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """set_config must not retry on 5xx — consistent with other POSTs.
+
+    A duplicated POST could re-apply a configuration change. POST methods
+    default to non-retryable; set_config previously opted into retries.
+    """
+    url = "http://192.168.1.100/setConfig"
+    mock_aioresponse.post(url, status=500, body="server error")
+
+    with pytest.raises(VioletPoolAPIError):
+        await api_client.set_config({"some_key": 1})
+
+    assert len(mock_aioresponse.requests[("POST", URL(url))]) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_calibration_history_url_encodes_sensor(
+    api_client: VioletPoolAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sensor names with reserved characters must be percent-encoded.
+
+    Regression for v0.0.36: ``sensor`` was concatenated raw into the URL,
+    so a value containing ``&`` or space could inject extra query
+    parameters. The value passed to ``_request`` must be percent-encoded.
+    """
+    captured: dict[str, object] = {}
+
+    async def fake_request(endpoint: str, **kwargs: Any) -> str:  # noqa: ANN401
+        captured["query"] = kwargs.get("query")
+        return "2024-01-01 | 7.2 | pH_CALIB"
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    await api_client.get_calibration_history("pH value & test")
+
+    assert captured["query"] == "pH%20value%20%26%20test"
+
+
+@pytest.mark.asyncio
+async def test_get_log_rejects_unknown_log_type(api_client: VioletPoolAPI) -> None:
+    """Unknown log_type values must be rejected before the request is sent."""
+    with pytest.raises(VioletPoolAPIError, match="Unsupported log_type"):
+        await api_client.get_log("drop_table")
+
+
+@pytest.mark.asyncio
+async def test_get_log_valid_log_type_reaches_request(
+    api_client: VioletPoolAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Valid log_type is passed through to the request layer."""
+    captured: dict[str, object] = {}
+
+    async def fake_request(endpoint: str, **kwargs: Any) -> str:  # noqa: ANN401
+        captured["query"] = kwargs.get("query")
+        return "line one\nLOAD_MORE"
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    result = await api_client.get_log("actions", page=0)
+
+    assert captured["query"] == "actions&0"
+    assert result["has_more"] is True
+    assert result["lines"] == ["line one"]
+
+
+@pytest.mark.asyncio
+async def test_restore_calibration_sanitizes_payload(
+    api_client: VioletPoolAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """restore_calibration must sanitize sensor/timestamp before posting."""
+    captured: dict[str, object] = {}
+
+    async def fake_request(endpoint: str, **kwargs: Any) -> str:  # noqa: ANN401
+        captured["data"] = kwargs.get("data")
+        return "OK"
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    await api_client.restore_calibration("pH", "2024-01-01 12:00")
+
+    assert captured["data"] == {"sensor": "pH", "timestamp": "2024-01-01 12:00"}
+
+
+def test_input_sanitizer_no_duplicate_validate_duration() -> None:
+    """InputSanitizer must not expose validate_duration/validate_speed.
+
+    These names collided with the raising validators in ``_api_model`` but
+    silently clamped instead. They were removed in v0.0.36.
+    """
+    from violet_poolcontroller_api.utils_sanitizer import InputSanitizer
+
+    assert not hasattr(InputSanitizer, "validate_duration")
+    assert not hasattr(InputSanitizer, "validate_speed")

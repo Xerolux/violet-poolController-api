@@ -37,7 +37,7 @@ class DosingMixin(APIClientMixin):
         key: str,
         action: str,
         *,
-        duration: float | None = None,
+        duration: int | None = None,
     ) -> dict[str, Any]:
         """Trigger or stop a manual dosing run via /triggerManualDosing.
 
@@ -48,9 +48,9 @@ class DosingMixin(APIClientMixin):
 
         Args:
             key: The dosing pump key (e.g. DOS_6_FLOC).
-            action: ON/START ÔåÆ DOSSTART; OFF/STOP/AUTO ÔåÆ DOSSTOP
+            action: ON/START → DOSSTART; OFF/STOP/AUTO → DOSSTOP
                 (stopping a run returns the channel to automatic mode).
-            duration: Duration in seconds.
+            duration: Duration in seconds (whole number).
 
         Returns:
             A dictionary with the command result.

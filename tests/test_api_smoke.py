@@ -379,6 +379,21 @@ async def run_all_tests(api: VioletPoolAPI) -> None:
         check=lambda r: "not success" if not r.get("success") else None,
     )
 
+    # ── OmniTronic multi-port valve ─────────────────────────────────────
+    print("[OmniTronic]")
+
+    await _run(
+        "set_omni_position(2)",
+        api.set_omni_position(2),
+        check=lambda r: "missing OMNITRONIC ack" if "OMNITRONIC" not in r.get("response", "") else None,
+    )
+
+    await _run(
+        "set_omni_position(0) - filtration",
+        api.set_omni_position(0),
+        check=lambda r: "not success" if not r.get("success") else None,
+    )
+
     # ── PV Surplus ──────────────────────────────────────────────────────
     print("[PV Surplus]")
 

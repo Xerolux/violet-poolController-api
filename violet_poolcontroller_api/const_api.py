@@ -79,6 +79,8 @@ LOG_TYPE_ACTIONS = "actions"
 LOG_TYPE_SWITCHING = "switching"
 LOG_TYPE_ONEWIRE = "onewire"
 
+LOG_TYPES = frozenset({LOG_TYPE_ACTIONS, LOG_TYPE_SWITCHING, LOG_TYPE_ONEWIRE})
+
 # Settings for optimizing data refreshes by fetching specific groups.
 #
 # The controller's /getReadings endpoint (firmware includes/getReadings.js)

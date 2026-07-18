@@ -366,58 +366,6 @@ class InputSanitizer:
         return sanitized
 
     @staticmethod
-    def validate_duration(duration: Any, min_sec: int = 0, max_sec: int = 86400) -> int:  # noqa: ANN401
-        """Validiere eine Duration in Sekunden.
-
-        Args:
-            duration: Duration-Wert
-            min_sec: Minimale Duration (Standard: 0)
-            max_sec: Maximale Duration (Standard: 24h)
-
-        Returns:
-            Validierte Duration in Sekunden
-
-        """
-        duration_int = InputSanitizer.sanitize_integer(
-            duration,
-            min_value=min_sec,
-            max_value=max_sec,
-            default=0,
-        )
-
-        if duration_int < 0:
-            _LOGGER.warning("Negative Duration %d, setze auf 0", duration_int)
-            return 0
-
-        return duration_int
-
-    @staticmethod
-    def validate_speed(
-        speed: Any,
-        min_speed: int = 1,
-        max_speed: int = 4,
-        default: int = 2,  # noqa: ANN401
-    ) -> int:
-        """Validiere einen Speed-Wert (z.B. Pumpengeschwindigkeit).
-
-        Args:
-            speed: Speed-Wert
-            min_speed: Minimale Speed (Standard: 1)
-            max_speed: Maximale Speed (Standard: 4)
-            default: Default Speed (Standard: 2)
-
-        Returns:
-            Validierte Speed
-
-        """
-        return InputSanitizer.sanitize_integer(
-            speed,
-            min_value=min_speed,
-            max_value=max_speed,
-            default=default,
-        )
-
-    @staticmethod
     def validate_temperature(
         temp: Any,  # noqa: ANN401
         min_temp: float = -50.0,
