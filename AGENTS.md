@@ -87,3 +87,73 @@ Features:
 3. If adding new API methods: add corresponding mock server handler AND smoke test
 4. If modifying endpoints: update both `const_api.py` constants and mock server
 5. Never commit secrets, passwords, or real IP addresses
+
+## Backward Compatibility & Deprecation Policy
+
+This library has downstream consumers — most notably the Home Assistant
+integration at [Xerolux/violet-hass](https://github.com/Xerolux/violet-hass),
+but also any third-party user importing `violet_poolcontroller_api`. A
+"minor" removal in this repo can break a downstream release days later,
+because consumers pin `>=` and resolve the latest version at install time.
+
+**Background.** v0.0.36 removed `InputSanitizer.validate_speed` and
+`InputSanitizer.validate_duration` (faulty duplicates of the canonical
+validators in `_api_model`). The HA integration still called them, so the
+next integration release failed its CI on Python 3.12/3.13 (which resolved
+0.0.36) while the maintainer's local venv still had 0.0.35 pinned. The fix
+required a same-day migration of the integration. This policy exists to
+prevent that class of breakage.
+
+### What counts as a breaking change
+
+Treat any of these as breaking, regardless of how small it looks:
+
+- Removing or renaming a public symbol (class, function, method, constant,
+  module attribute) — including ones you believe are "unused".
+- Changing a function/method signature (parameter names, positional↔keyword,
+  adding required params, removing kwargs consumers pass).
+- Changing documented behavior in a way consumers may rely on (e.g.
+  "silently clamps" → "raises").
+- Changing the wire format, error type, or return-type shape of a public
+  method that consumers assert on.
+
+### Procedure for breaking changes
+
+Do **not** remove in the same release you deprecate. Follow this sequence:
+
+1. **Deprecate first.** Keep the old symbol callable. Emit a
+   `DeprecationWarning` with a clear message naming the replacement and
+   the version where removal is planned. Update docstrings to say
+   *"Deprecated since vX.Y.Z, use <replacement>. Will be removed in
+   vX.Y+2."*
+2. **Update every known consumer.** Open the matching PR in
+   `Xerolux/violet-hass` (and any other tracked consumer) that migrates off
+   the deprecated symbol. Wait for it to merge and ship a release before
+   proceeding to step 3.
+3. **Document in CHANGELOG.** Mark the deprecation under a `Deprecated`
+   heading in the library's `CHANGELOG.md` so it is visible at release time.
+4. **Remove in a later release.** Only after at least one full release cycle
+   with the deprecation live AND the consumer migration shipped. Record the
+   removal under a `Removed` heading.
+
+### Versioning
+
+While the major version is still `0.x`, treat the **minor** digit as the
+compatibility boundary (i.e. SemVer-0.0 rules): breaking changes bump the
+minor version (`0.0.36` → `0.1.0`), deprecations and additive changes may
+ship in a patch. Once the library reaches `1.0.0`, switch to full SemVer.
+
+### Additive changes (non-breaking)
+
+Adding new methods, new constants, new optional parameters with defaults,
+or loosening validation is **non-breaking** and may ship in any release.
+Still note them under `Added` in `CHANGELOG.md`.
+
+### Quick checklist before cutting a release
+
+- [ ] No public symbol removed or renamed in this release without a prior
+      deprecation cycle.
+- [ ] If a signature changed, the known consumers have already shipped a
+      release that works with the new signature.
+- [ ] `CHANGELOG.md` has `Deprecated` / `Removed` / `Added` sections
+      matching the actual changes.
