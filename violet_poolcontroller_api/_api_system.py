@@ -24,6 +24,8 @@ from .const_api import (
     ERROR_SEVERITY_INFO,
     ERROR_SEVERITY_REMINDER,
     ERROR_SEVERITY_WARNING,
+    LOG_TYPE_ACTIONS,
+    LOG_TYPES,
     SYSTEM_SERVICES,
 )
 
@@ -127,11 +129,23 @@ class SystemMixin(APIClientMixin):
             - ``has_more``: True when ``LOAD_MORE`` sentinel was present
             - ``raw``: the raw text response
 
+        Raises:
+            VioletPoolAPIError: If ``log_type`` is not one of the supported
+                values or the request fails.
+
         """
-        if page < 0 and log_type == "actions":
+        normalized = (log_type or "").strip()
+        if normalized not in LOG_TYPES:
+            msg = (
+                f"Unsupported log_type {log_type!r}. "
+                f"Expected one of: {sorted(LOG_TYPES)}"
+            )
+            raise VioletPoolAPIError(msg)
+
+        if page < 0 and normalized == LOG_TYPE_ACTIONS:
             query = "downloadActionsLog"
         else:
-            query = f"{log_type}&{page}"
+            query = f"{normalized}&{int(page)}"
 
         resp = await self._request(
             API_GET_LOG,

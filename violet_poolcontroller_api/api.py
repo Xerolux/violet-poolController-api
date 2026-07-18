@@ -28,7 +28,7 @@ import random
 import re
 import ssl
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import aiohttp
 
@@ -503,15 +503,15 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
         key: str,
         action: str,
         *,
-        duration: float | None = None,
-        last_value: float | None = None,
+        duration: int | None = None,
+        last_value: int | None = None,
     ) -> str:
         """Render the command payload based on the device parameter template.
 
         Args:
             key: The device key.
             action: The action to perform (e.g., ON, OFF).
-            duration: The duration for the action.
+            duration: The duration for the action in seconds.
             last_value: The last value (e.g., speed).
 
         Returns:
@@ -589,7 +589,11 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
                         allow_special_chars=True,
                         escape_html=False,
                     )
-                elif isinstance(value, (int, float)):
+                elif isinstance(value, bool):
+                    sanitized_value = 1 if value else 0
+                elif isinstance(value, int):
+                    sanitized_value = value
+                elif isinstance(value, float):
                     sanitized_value = InputSanitizer.sanitize_numeric(value)
                 else:
                     sanitized_value = InputSanitizer.sanitize_string(str(value))
@@ -686,7 +690,6 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
             API_SET_CONFIG,
             method="POST",
             data=sanitized_config,
-            retryable=True,
         )
         return self._command_result(body)
 
@@ -724,7 +727,7 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
 
         response = await self._request(
             API_GET_CALIB_HISTORY,
-            query=sensor,
+            query=quote(sensor, safe=""),
             expect_json=False,
         )
 
@@ -765,7 +768,8 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
             A dictionary with the command result.
 
         Raises:
-            VioletPoolAPIError: If the sensor or timestamp is missing.
+            VioletPoolAPIError: If the sensor or timestamp is missing or
+                contains invalid characters.
 
         """
         if not sensor or not timestamp:
@@ -774,9 +778,26 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
                 msg,
             )
 
+        try:
+            safe_sensor = InputSanitizer.sanitize_string(
+                sensor,
+                max_length=64,
+                allow_special_chars=True,
+                escape_html=False,
+            )
+            safe_timestamp = InputSanitizer.sanitize_string(
+                timestamp,
+                max_length=64,
+                allow_special_chars=True,
+                escape_html=False,
+            )
+        except ValueError as err:
+            msg = "Invalid sensor or timestamp for calibration restore"
+            raise VioletPoolAPIError(msg) from err
+
         body = await self._request(
             API_RESTORE_CALIBRATION,
             method="POST",
-            data={"sensor": sensor, "timestamp": timestamp},
+            data={"sensor": safe_sensor, "timestamp": safe_timestamp},
         )
         return self._command_result(body)

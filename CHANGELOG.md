@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.0.36
+
+### Security / Hardening
+- **fix: user input in `get_calibration_history()` was not URL-encoded** — the `sensor` argument was concatenated raw into the request URL. A value containing spaces, `#`, `&`, or other reserved characters produced a malformed URL or injected an extra query parameter (`sensor="pH&x=1"` → `?pH&x=1`). The value is now percent-encoded with `urllib.parse.quote(safe="")`, consistent with the encoding already applied in `set_switch_state()`.
+- **fix: `get_log()` no longer accepts arbitrary `log_type` values** — the `log_type` argument is now validated against the documented set (`actions`, `switching`, `onewire`) and raises `VioletPoolAPIError` for anything else, preventing untrusted values from reaching the request URL.
+- **fix: `restore_calibration()` now sanitizes `sensor` and `timestamp`** — previously these caller-provided strings were placed into the POST form data without length bounds or character filtering, unlike every key in `set_config()`. Both are now run through `InputSanitizer.sanitize_string()`.
+
+### Fixes
+- **fix: integer config values were coerced to float on the wire** — `_sanitize_config_payload()` routed every `int`/`float` through `InputSanitizer.sanitize_numeric()`, which always returns a `float`. An integer flag like `1` was therefore form-encoded as `1.0`, and `{"DOS_*_use": 1}` (used by `set_dosage_enabled()`) sent `1.0`/`0.0`. Integer and boolean values are now preserved as integers (`bool` → `0`/`1`).
+- **fix: `set_config()` was the only state-changing POST that retried on 5xx** — all other POSTs (`triggerManualDosing`, `setDosingParameters`, …) are non-retryable by default, and `test_manual_dosing_post_is_not_retried` codifies that contract. `set_config()` silently opted into `retryable=True`, so a transient 5xx after the controller had already applied the payload would re-send it. The override is removed; `set_config` is now non-retryable like the rest.
+- **fix: mock server `set_omni_position` handler was never wired** — `handle_set_omni_position` was defined but `create_app()` never routed `/setFunctionManually` OMNI queries to it, so every `OMNI,OMNI_DC<N>` request fell through to the generic handler. This returned `OK\nOMNI\n...` (instead of the documented `OK\nOMNITRONIC\n...`) and never updated `omni_position` in `/mock/state`. The OMNI case is now dispatched from `handle_set_function_manually`, and the smoke test covers it end-to-end.
+
+### Cleanup
+- **refactor: remove duplicate `InputSanitizer.validate_duration` / `validate_speed`** — these static methods collided by name with the raising validators in `_api_model` but silently clamped values instead, and were unused. Removed to avoid the foot-gun; the canonical `validate_duration` is the one re-exported from the package root.
+- **refactor: correct `duration` / `last_value` type hints** — annotated as `float | None` even though `validate_duration()` rejects non-whole numbers and `_build_manual_command()` truncates `last_value` via `int()`. Now typed as `int | None` to match actual behaviour.
+- **style: fix mojibake** (`ÔåÆ` → `→`) in docstrings/comments and drop redundant `except (Exception):` parentheses.
+
+### Installation
+```bash
+pip install violet-poolController-api==0.0.36
+```
+
+---
+
 ## v0.0.35
 
 ### Fixes

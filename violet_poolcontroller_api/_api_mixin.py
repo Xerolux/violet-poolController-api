@@ -49,8 +49,8 @@ class APIClientMixin:
         key: str,
         action: str,
         *,
-        duration: float | None = None,
-        last_value: float | None = None,
+        duration: int | None = None,
+        last_value: int | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -59,7 +59,7 @@ class APIClientMixin:
         key: str,
         action: str,
         *,
-        duration: float | None = None,
+        duration: int | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -68,8 +68,8 @@ class APIClientMixin:
         key: str,
         action: str,
         *,
-        duration: float | None = None,
-        last_value: float | None = None,
+        duration: int | None = None,
+        last_value: int | None = None,
     ) -> str:
         raise NotImplementedError
 

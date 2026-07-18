@@ -75,8 +75,8 @@ class OutputsMixin(APIClientMixin):
         key: str,
         action: str,
         *,
-        duration: float | None = None,
-        last_value: float | None = None,
+        duration: int | None = None,
+        last_value: int | None = None,
     ) -> dict[str, Any]:
         """Control a function output.
 
@@ -86,7 +86,7 @@ class OutputsMixin(APIClientMixin):
         Args:
             key: The device key.
             action: The action to perform (e.g., ON, OFF, AUTO).
-            duration: An optional duration for the action.
+            duration: An optional whole-number duration in seconds.
             last_value: An optional last value (e.g., speed).
 
         Returns:
