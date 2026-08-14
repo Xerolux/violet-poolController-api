@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Never
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
@@ -29,7 +30,11 @@ import pytest_asyncio
 from aioresponses import aioresponses
 from yarl import URL
 
-from violet_poolcontroller_api.api import VioletPoolAPI, VioletPoolAPIError
+from violet_poolcontroller_api.api import (
+    VioletPoolAPI,
+    VioletPoolAPIError,
+    VioletSetpointError,
+)
 from violet_poolcontroller_api.circuit_breaker import CircuitBreakerOpenError
 from violet_poolcontroller_api.const_api import (
     ERROR_CODES,
@@ -37,6 +42,7 @@ from violet_poolcontroller_api.const_api import (
     ERROR_SEVERITY_INFO,
     ERROR_SEVERITY_REMINDER,
     ERROR_SEVERITY_WARNING,
+    TARGET_PH,
 )
 
 if TYPE_CHECKING:
@@ -939,6 +945,15 @@ async def test_set_dosing_parameters(
 
 
 @pytest.mark.asyncio
+async def test_set_dosing_parameters_enforces_setpoint_range(
+    api_client: VioletPoolAPI,
+) -> None:
+    """set_dosing_parameters must not bypass the pH/ORP/chlorine safety bounds."""
+    with pytest.raises(VioletSetpointError, match="outside the valid range"):
+        await api_client.set_dosing_parameters({TARGET_PH: 20.0})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("raw_value", "expected"), [("1", True), ("1.0", True), ("0.0", False)])
 async def test_is_dosage_enabled_accepts_numeric_strings(
     mock_aioresponse: aioresponses,
@@ -1101,6 +1116,38 @@ async def test_get_system_services(
         "tunnel": True,
         "support_tunnel": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_get_system_services_accepts_decimal_state(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """The controller may report service state as a decimal string like '1.0'."""
+    url = "http://192.168.1.100/getServiceStates"
+    mock_aioresponse.get(
+        url,
+        payload={"proftpd": "1.0", "shairport": "0.0"},
+        status=200,
+    )
+
+    result = await api_client.get_system_services()
+
+    assert result["ftp"] is True
+    assert result["shairport"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_system_services_rejects_garbage_state(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """A non-numeric service state must raise, not crash with a bare ValueError."""
+    url = "http://192.168.1.100/getServiceStates"
+    mock_aioresponse.get(url, payload={"proftpd": "not-a-number"}, status=200)
+
+    with pytest.raises(VioletPoolAPIError, match="Invalid service state"):
+        await api_client.get_system_services()
 
 
 # ---------------------------------------------------------------------------
@@ -1865,6 +1912,40 @@ async def test_server_error_still_counts_for_circuit_breaker(
     if "note" in stats:
         pytest.skip("Lock held during stats collection")
     assert stats["failure_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_reacquired_on_every_retry(
+    mock_aioresponse: aioresponses,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each retry attempt must re-acquire a rate-limit token, not just the first.
+
+    Regression test: wait_if_needed() used to be awaited once before the
+    retry loop, so retries fired real HTTP requests without ever going
+    through the limiter again.
+    """
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, status=500, body="boom", repeat=True)
+    # Backoff sleeps aren't what this test verifies; skip them for speed.
+    monkeypatch.setattr("violet_poolcontroller_api.api.asyncio.sleep", AsyncMock())
+
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(host="192.168.1.100", session=session, max_retries=3)
+        call_count = 0
+        original_wait = api._rate_limiter.wait_if_needed  # noqa: SLF001
+
+        async def counting_wait(*args: object, **kwargs: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            await original_wait(*args, **kwargs)
+
+        api._rate_limiter.wait_if_needed = counting_wait  # type: ignore[method-assign]  # noqa: SLF001
+
+        with pytest.raises(VioletPoolAPIError):
+            await api.get_readings()
+
+    assert call_count == 3
 
 
 def test_command_result_error_first_line() -> None:

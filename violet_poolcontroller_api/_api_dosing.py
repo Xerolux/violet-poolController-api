@@ -7,8 +7,10 @@ from typing import Any
 
 from ._api_mixin import APIClientMixin
 from ._api_model import (
+    SETPOINT_RANGES,
     VioletPayloadError,
     VioletPoolAPIError,
+    VioletSetpointError,
     validate_duration,
     validate_setpoint,
 )
@@ -27,6 +29,20 @@ from .const_api import (
     TARGET_ORP,
     TARGET_PH,
 )
+
+
+def _to_float(field: str, value: Any) -> float:
+    """Convert ``value`` to float, raising the documented exception type.
+
+    ``float()`` alone raises a bare ``ValueError``/``TypeError`` for
+    non-numeric input, which callers relying on the ``VioletSetpointError``
+    contract documented on the setpoint setters would not catch.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError) as err:
+        msg = f"Invalid setpoint for '{field}': {value!r} is not a number"
+        raise VioletSetpointError(msg) from err
 
 
 class DosingMixin(APIClientMixin):
@@ -142,8 +158,9 @@ class DosingMixin(APIClientMixin):
                 is not a finite number.
 
         """
-        validate_setpoint(TARGET_PH, float(value))
-        return await self.set_target_value(TARGET_PH, float(value))
+        numeric_value = _to_float(TARGET_PH, value)
+        validate_setpoint(TARGET_PH, numeric_value)
+        return await self.set_target_value(TARGET_PH, numeric_value)
 
     async def set_orp_target(self, value: int) -> dict[str, Any]:
         """Update the ORP setpoint.
@@ -159,8 +176,9 @@ class DosingMixin(APIClientMixin):
                 is not a finite number.
 
         """
-        validate_setpoint(TARGET_ORP, float(value))
-        return await self.set_target_value(TARGET_ORP, int(value))
+        numeric_value = _to_float(TARGET_ORP, value)
+        validate_setpoint(TARGET_ORP, numeric_value)
+        return await self.set_target_value(TARGET_ORP, int(numeric_value))
 
     async def set_min_chlorine_level(self, value: float) -> dict[str, Any]:
         """Update the minimum chlorine level.
@@ -176,8 +194,9 @@ class DosingMixin(APIClientMixin):
                 is not a finite number.
 
         """
-        validate_setpoint(TARGET_MIN_CHLORINE, float(value))
-        return await self.set_target_value(TARGET_MIN_CHLORINE, float(value))
+        numeric_value = _to_float(TARGET_MIN_CHLORINE, value)
+        validate_setpoint(TARGET_MIN_CHLORINE, numeric_value)
+        return await self.set_target_value(TARGET_MIN_CHLORINE, numeric_value)
 
     async def set_target_value(self, key: str, value: float) -> dict[str, Any]:
         """Send a generic target value update to the controller.
@@ -198,7 +217,8 @@ class DosingMixin(APIClientMixin):
                 known valid range for ``key``.
 
         """
-        validate_setpoint(key, float(value))
+        numeric_value = _to_float(key, value)
+        validate_setpoint(key, numeric_value)
         return await self.set_config({key: value})
 
     async def set_dosing_parameters(
@@ -217,7 +237,15 @@ class DosingMixin(APIClientMixin):
         Returns:
             A dictionary with the command result.
 
+        Raises:
+            VioletSetpointError: If a known setpoint key (see
+                ``SETPOINT_RANGES``, e.g. ``TARGET_PH``) is present with a
+                value outside its documented valid range.
+
         """
+        for key, value in parameters.items():
+            if key in SETPOINT_RANGES:
+                validate_setpoint(key, _to_float(key, value))
         return await self.set_config(dict(parameters))
 
     async def set_dosage_enabled(
@@ -316,7 +344,7 @@ class DosingMixin(APIClientMixin):
                 f"Expected one of: {sorted(DOSING_CANISTER_ID)}"
             )
             raise VioletPoolAPIError(msg)
-        if amount_ml <= 0:
+        if int(amount_ml) <= 0:
             raise ValueError(f"amount_ml must be > 0, got {amount_ml}")
 
         action = "RESET" if reset else "ADJUST"

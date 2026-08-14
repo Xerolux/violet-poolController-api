@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ._api_mixin import APIClientMixin
-from ._api_model import VioletPoolAPIError
+from ._api_model import VioletPayloadError, VioletPoolAPIError
 from .const_api import (
     API_GET_LIVE_TRACE,
     API_GET_LOG,
@@ -268,7 +268,12 @@ class SystemMixin(APIClientMixin):
             if not state_key:
                 continue
             if state_key in raw:
-                result[service] = bool(int(raw[state_key]))
+                raw_value = raw[state_key]
+                try:
+                    result[service] = bool(int(float(raw_value)))
+                except (TypeError, ValueError, OverflowError) as err:
+                    msg = f"Invalid service state for {service}: {raw_value!r}"
+                    raise VioletPayloadError(msg) from err
         return result
 
     async def get_live_trace(self) -> dict[str, str]:

@@ -444,7 +444,7 @@ class VioletReadings(Mapping[str, Any]):
                 result[key] = None
             else:
                 try:
-                    result[key] = int(v)
+                    result[key] = int(float(v))
                 except (ValueError, TypeError):
                     result[key] = None
         return result

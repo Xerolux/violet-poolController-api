@@ -132,6 +132,16 @@ class InputSanitizer:
                 return float(value)
 
             str_value = str(value).strip()
+            try:
+                parsed = float(str_value)
+            except ValueError:
+                pass
+            else:
+                if not math.isfinite(parsed):
+                    _LOGGER.warning("Unendlicher/NaN-Wert: %s", value)
+                    return 0.0
+                return parsed
+
             has_minus = str_value.startswith("-")
             cleaned = re.sub(r"[^0-9.]", "", str_value)
             if has_minus and cleaned:
@@ -398,13 +408,14 @@ class InputSanitizer:
             ph: pH-Wert
 
         Returns:
-            Validierter pH-Wert (6.0-9.0)
+            Validierter pH-Wert (6.0-8.0), passend zum vom Controller
+            akzeptierten Sollwertbereich (siehe ``SETPOINT_RANGES``).
 
         """
         return InputSanitizer.sanitize_float(
             ph,
             min_value=6.0,
-            max_value=9.0,
+            max_value=8.0,
             precision=1,
             default=7.2,
         )

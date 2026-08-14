@@ -86,6 +86,37 @@ class TestVioletReadingsTypeConversions:
         assert null_val is None
 
 
+class TestVioletReadingsDosingAmounts:
+    """Regression tests for dosing_daily_amounts_ml decimal parsing."""
+
+    def test_decimal_amounts_are_not_dropped(self):
+        """Fractional mL amounts (the controller's actual wire format) must parse."""
+        data = {
+            "DOS_1_CL_DAILY_DOSING_AMOUNT_ML": "12.5",
+            "DOS_2_ELO_DAILY_DOSING_AMOUNT_ML": "0.0",
+            "DOS_4_PHM_DAILY_DOSING_AMOUNT_ML": "8.3",
+            "DOS_5_PHP_DAILY_DOSING_AMOUNT_ML": "0.0",
+            "DOS_6_FLOC_DAILY_DOSING_AMOUNT_ML": "3.1",
+        }
+        readings = VioletReadings(data)
+        amounts = readings.dosing_daily_amounts_ml
+        assert amounts["DOS_1_CL"] == 12
+        assert amounts["DOS_4_PHM"] == 8
+        assert amounts["DOS_6_FLOC"] == 3
+
+    def test_missing_amount_is_none(self):
+        """Missing keys stay None rather than raising."""
+        readings = VioletReadings({})
+        amounts = readings.dosing_daily_amounts_ml
+        assert amounts["DOS_1_CL"] is None
+
+    def test_garbage_amount_is_none(self):
+        """Non-numeric values fall back to None instead of raising."""
+        readings = VioletReadings({"DOS_1_CL_DAILY_DOSING_AMOUNT_ML": "not-a-number"})
+        amounts = readings.dosing_daily_amounts_ml
+        assert amounts["DOS_1_CL"] is None
+
+
 class TestVioletReadingsAggregation:
     """Test readings aggregation and derived properties."""
 

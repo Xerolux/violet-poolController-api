@@ -332,17 +332,6 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
             raise ValueError(msg)
 
         async def _execute_request() -> Any:  # noqa: ANN401
-            # Wait if the rate limit is reached
-            try:
-                await self._rate_limiter.wait_if_needed(priority=priority, timeout=10.0)
-            except TimeoutError:
-                _LOGGER.warning(
-                    "Rate limiter timeout for %s (priority: %d) - applying fallback delay",
-                    endpoint,
-                    priority,
-                )
-                await asyncio.sleep(1.0)
-
             url = self._build_url(endpoint)
             if query:
                 url = f"{url}?{query}"
@@ -352,6 +341,18 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
             attempt_limit = self._max_retries if should_retry else 1
 
             for attempt in range(1, attempt_limit + 1):
+                # Wait if the rate limit is reached; re-acquired on every
+                # attempt so retries cannot bypass the per-request cap.
+                try:
+                    await self._rate_limiter.wait_if_needed(priority=priority, timeout=10.0)
+                except TimeoutError:
+                    _LOGGER.warning(
+                        "Rate limiter timeout for %s (priority: %d) - applying fallback delay",
+                        endpoint,
+                        priority,
+                    )
+                    await asyncio.sleep(1.0)
+
                 try:
                     async with self._session.request(
                         method,
@@ -367,6 +368,9 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
                             response.status >= _HTTP_SERVER_ERROR
                             or response.status == _HTTP_TOO_MANY_REQUESTS
                         ):
+                            # Drain the body so aiohttp can return the
+                            # connection to the pool instead of closing it.
+                            await response.read()
                             # Server error or rate limit
                             # -> trigger retry via ClientError
                             response.raise_for_status()
