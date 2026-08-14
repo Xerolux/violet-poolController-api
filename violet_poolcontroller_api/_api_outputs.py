@@ -64,9 +64,10 @@ class OutputsMixin(APIClientMixin):
 
         duration_ms = validate_duration(duration) * 1000
         payload = f"{output},{mode},{duration_ms}"
+        query = quote(payload, safe=",")
         body = await self._request(
             API_SET_OUTPUT_TESTMODE,
-            query=payload,
+            query=query,
         )
         return self._command_result(body)
 
@@ -493,13 +494,22 @@ class OutputsMixin(APIClientMixin):
                 f"Expected one of {RS485_PUMP_MODES}"
             )
             raise VioletPoolAPIError(msg)
-        if slave_id < 1 or slave_id > 247:
+        try:
+            slave_id_int = int(slave_id)
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"slave_id must be an integer, got {slave_id!r}") from err
+        if slave_id_int < 1 or slave_id_int > 247:
             raise ValueError(f"slave_id must be 1-247, got {slave_id}")
-        if not math.isfinite(float(level)):
+
+        try:
+            level_finite = math.isfinite(float(level))
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"level must be a number, got {level!r}") from err
+        if not level_finite:
             raise ValueError(f"level must be finite, got {level}")
 
         url = (
-            f"{API_SET_RS485_LIVE}?{pump_name},{int(slave_id)},"
+            f"{API_SET_RS485_LIVE}?{pump_name},{slave_id_int},"
             f"{mode.lower()},{level}"
         )
         body = await self._request(
