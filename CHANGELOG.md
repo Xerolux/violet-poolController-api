@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - **Two exceptions, kept deliberately and now stated with the reason:** the controller's own strings — `ERROR_CODES` in `const_api.py` and the German payloads `tests/mock_server.py` replays — are data, not prose, and translating them would break the match with what the device actually reports; and `docs/de/*.md`, the German half of the bilingual documentation.
 
 ### Tests
+- **fix: the language-policy test failed the release job.** It exempted the controller's German strings by file path, but `python -m build` copies the package into `build/lib/`, and the release builds the wheel before running the checks — so the scan hit a duplicate `const_api.py` that no exemption covered. Exemptions are matched by file name now, generated directories (`build`, `dist`, `.tox`, `.venv`, `*.egg-info`, `__pycache__`) are skipped, and a test asserts that a built copy is never scanned.
 - `tests/test_language_policy.py`: every Python file outside the two exempt ones is scanned for German function words, the changelog is scanned as well, and the controller's error strings are asserted to still be German — the exemption is the point, so a well-meant cleanup of the error table fails the suite too. 221 → 249 tests.
 
 ## v0.0.37
