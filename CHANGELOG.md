@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## v0.0.37
+## v0.0.38
 
 ### Fixes
 - **fix: two exception messages reached callers in German** — `sanitize_device_key()` raised `"Device-Key darf nicht leer sein"` and `sanitize_api_parameter()` raised `"API-Parameter darf nicht leer sein"`. A consumer passing an empty key got a German error out of a package published on PyPI. Both are now English (`"Device key must not be empty"`, `"API parameter must not be empty"`). Anything matching on the message text — nothing in this repository did — needs updating.
@@ -13,6 +13,17 @@ All notable changes to this project will be documented in this file.
 
 ### Tests
 - `tests/test_language_policy.py`: every Python file outside the two exempt ones is scanned for German function words, the changelog is scanned as well, and the controller's error strings are asserted to still be German — the exemption is the point, so a well-meant cleanup of the error table fails the suite too. 221 → 249 tests.
+
+## v0.0.37
+
+Released 2026-08-14 without a changelog section; recorded here so the file does
+not skip a published version. See
+[#47](https://github.com/Xerolux/violet-poolController-api/pull/47).
+
+### Fixes
+- dosing setpoint validation gaps
+- rate limiter bypassed on retries
+- decimal parsing
 
 ## v0.0.36
 
