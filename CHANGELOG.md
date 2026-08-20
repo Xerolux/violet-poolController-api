@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.0.37
+
+### Fixes
+- **fix: two exception messages reached callers in German** — `sanitize_device_key()` raised `"Device-Key darf nicht leer sein"` and `sanitize_api_parameter()` raised `"API-Parameter darf nicht leer sein"`. A consumer passing an empty key got a German error out of a package published on PyPI. Both are now English (`"Device key must not be empty"`, `"API parameter must not be empty"`). Anything matching on the message text — nothing in this repository did — needs updating.
+
+### Documentation
+- **English is binding for everything written into this repository.** `AGENTS.md` now states the rule as a table: changelog, commit messages, branch names, pull request titles and bodies, code comments, docstrings, file headers, library log and exception text, the top-level documents, the English `docs/*.md` and test names. The German header comment of all 12 modules and the German comments, docstrings and log messages of `utils_sanitizer.py` and `utils_rate_limiter.py` are translated.
+- **Two exceptions, kept deliberately and now stated with the reason:** the controller's own strings — `ERROR_CODES` in `const_api.py` and the German payloads `tests/mock_server.py` replays — are data, not prose, and translating them would break the match with what the device actually reports; and `docs/de/*.md`, the German half of the bilingual documentation.
+
+### Tests
+- `tests/test_language_policy.py`: every Python file outside the two exempt ones is scanned for German function words, the changelog is scanned as well, and the controller's error strings are asserted to still be German — the exemption is the point, so a well-meant cleanup of the error table fails the suite too. 221 → 249 tests.
+
 ## v0.0.36
 
 ### Security / Hardening
