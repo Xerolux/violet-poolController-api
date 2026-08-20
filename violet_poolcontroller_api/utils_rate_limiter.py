@@ -1,4 +1,4 @@
-# violet-poolController-api - API für Violet Pool Controller
+# violet-poolController-api - API for Violet Pool Controller
 # Copyright (C) 2024-2026  Xerolux
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Rate Limiter für API-Requests - Token Bucket Algorithm."""
+"""Rate limiter for API requests - token bucket algorithm."""
 
 from __future__ import annotations
 
@@ -34,8 +34,8 @@ class RateLimiter:
 
     Verhindert API-Overload durch:
     - Maximale Requests pro Zeitfenster
-    - Burst-Support für kurzzeitige Spitzen
-    - Priority Queue für kritische Requests
+    - Burst support for short spikes
+    - Priority queue for critical requests
     - Graceful Degradation bei Limit-Überschreitung
     """
 
@@ -89,7 +89,7 @@ class RateLimiter:
             "last_minute_reset": time.monotonic(),
         }
 
-        # Lock für Thread-Safety
+        # Lock for thread safety
         self._lock = asyncio.Lock()
         self._waiters: list[tuple[int, int, asyncio.Event]] = []
         self._waiter_sequence = 0
@@ -169,7 +169,7 @@ class RateLimiter:
             timeout: Maximale Wartezeit in Sekunden
 
         Raises:
-            TimeoutError: Wenn Timeout erreicht
+            TimeoutError: If the timeout is reached
 
         """
         start_time = time.monotonic()
@@ -279,7 +279,7 @@ class RateLimiter:
         _LOGGER.debug("Rate Limiter zurückgesetzt")
 
 
-# Global Rate Limiter-Instanz (kann pro API-Instanz auch separat erstellt werden)
+# Global rate limiter instance (one can also be created per API instance)
 _global_rate_limiter: RateLimiter | None = None
 
 

@@ -78,7 +78,45 @@ Features:
 - Ruff rules: E, F, W, I, UP
 - No comments unless explicitly requested
 - All public methods have docstrings with Args/Returns/Raises
-- German error messages from the controller are preserved as-is
+- See the language policy below: everything written here is English, with
+  two exceptions
+
+## Language Policy
+
+**Everything written into this repository is English.** This is binding, not a
+preference:
+
+| Artifact | Language |
+|---|---|
+| `CHANGELOG.md` | English |
+| Commit messages, branch names, PR titles and PR bodies | English |
+| Code comments, docstrings, file headers | English |
+| Log messages and exception text the library itself raises | English |
+| `README.md`, `AGENTS.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md` | English |
+| `docs/*.md` (the English wiki pages) | English |
+| Test names and test docstrings | English |
+
+**Two exceptions, and only these:**
+
+1. **Text the controller itself emits.** The error table in `const_api.py`
+   (`ERROR_CODES`) reproduces the messages the hardware returns, verbatim and
+   in German. The same goes for the German payloads `tests/mock_server.py`
+   replays. These are **data, not prose** - translating them would break the
+   match with what the device actually says, and downstream consumers rely on
+   the exact strings.
+2. **`docs/de/*.md`.** The documentation is published bilingually: each page
+   exists as `docs/<Page>.md` (English) and `docs/de/<Page>.md` (German). The
+   German file translates the English one, never the other way round - write
+   the English page first.
+
+Anything not covered by those two is English, including file headers and any
+comment.
+
+**Why it is written down:** this package is published on PyPI and consumed by
+`violet-hass` and by third parties. A German comment or changelog entry is
+read by people who do not speak German, and the mixture makes the code hard to
+review for anyone but the maintainer. Keeping the controller's own strings
+untranslated is a separate matter - there, fidelity to the device wins.
 
 ## When Making Changes
 
