@@ -1,4 +1,4 @@
-# violet-poolController-api - API für Violet Pool Controller
+# violet-poolController-api - API for Violet Pool Controller
 # Copyright (C) 2024-2026  Xerolux
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-"""Input Sanitization Utilities für User-Inputs und API-Parameter."""
+"""Input sanitization utilities for user inputs and API parameters."""
 
 from __future__ import annotations
 
@@ -33,11 +33,11 @@ _MAX_API_PARAM_LENGTH = 100
 
 
 class InputSanitizer:
-    """Input Sanitization für Sicherheit und Datenintegrität.
+    """Input sanitization for security and data integrity.
 
     Schützt vor:
     - XSS (Cross-Site Scripting)
-    - SQL Injection (nicht relevant bei HTTP API, aber defensiv)
+    - SQL injection (not relevant for an HTTP API, but defended against)
     - Command Injection
     - Path Traversal
     - Unerwarteten Zeichen
@@ -85,14 +85,14 @@ class InputSanitizer:
         # Konvertiere zu String
         str_value = str(value).strip()
 
-        # Unicode-Normalisierung (NFKD für Defense-in-Depth)
+        # Unicode normalisation (NFKD, defence in depth)
         # Normalized Form Compatibility Decomposition
         str_value = unicodedata.normalize("NFKD", str_value)
 
         # Längen-Validierung
         if len(str_value) > max_length:
             _LOGGER.warning(
-                "String zu lang (%d > %d), wird gekürzt: %s...",
+                "String too long (%d > %d), truncating: %s...",
                 len(str_value),
                 max_length,
                 str_value[:50],
@@ -233,7 +233,7 @@ class InputSanitizer:
             float_value = float(value)
             if not math.isfinite(float_value):
                 _LOGGER.warning(
-                    "Nicht-endlicher Float-Wert '%s', verwende default %.2f",
+                    "Non-finite float value '%s', using default %.2f",
                     value,
                     default,
                 )
@@ -315,7 +315,7 @@ class InputSanitizer:
 
         """
         if not key:
-            msg = "Device-Key darf nicht leer sein"
+            msg = "Device key must not be empty"
             raise ValueError(msg)
 
         # Nur Großbuchstaben, Zahlen und Underscore erlaubt
@@ -351,7 +351,7 @@ class InputSanitizer:
 
         """
         if not param:
-            msg = "API-Parameter darf nicht leer sein"
+            msg = "API parameter must not be empty"
             raise ValueError(msg)
 
         # Prüfe auf Path Traversal VOR der Bereinigung
@@ -458,27 +458,27 @@ class InputSanitizer:
         )
 
 
-# Singleton-Instanz für einfachen Zugriff
+# Singleton instance for convenient access
 _sanitizer = InputSanitizer()
 
 
 def sanitize_string(*args: Any, **kwargs: Any) -> str:  # noqa: ANN401
-    """Shortcut für InputSanitizer.sanitize_string()."""
+    """Shortcut for InputSanitizer.sanitize_string()."""
     return _sanitizer.sanitize_string(*args, **kwargs)
 
 
 def sanitize_integer(*args: Any, **kwargs: Any) -> int:  # noqa: ANN401
-    """Shortcut für InputSanitizer.sanitize_integer()."""
+    """Shortcut for InputSanitizer.sanitize_integer()."""
     return _sanitizer.sanitize_integer(*args, **kwargs)
 
 
 def sanitize_float(*args: Any, **kwargs: Any) -> float:  # noqa: ANN401
-    """Shortcut für InputSanitizer.sanitize_float()."""
+    """Shortcut for InputSanitizer.sanitize_float()."""
     return _sanitizer.sanitize_float(*args, **kwargs)
 
 
 def sanitize_boolean(*args: Any, **kwargs: Any) -> bool:  # noqa: ANN401
-    """Shortcut für InputSanitizer.sanitize_boolean()."""
+    """Shortcut for InputSanitizer.sanitize_boolean()."""
     return _sanitizer.sanitize_boolean(*args, **kwargs)
 
 
