@@ -37,10 +37,19 @@ PACKAGE = REPO / "violet_poolcontroller_api"
 
 # Text the controller emits, reproduced verbatim. Translating it would break
 # the match with what the device actually says.
-CONTROLLER_VERBATIM = (PACKAGE / "const_api.py", REPO / "tests" / "mock_server.py")
+#
+# Matched by file name, not by path: `python -m build` copies the package into
+# `build/lib/`, and an exemption keyed to the original path does not cover the
+# copy. That is not hypothetical - it failed the 0.0.38 release job, because
+# the release builds the wheel before running the checks.
+CONTROLLER_VERBATIM = frozenset({"const_api.py", "mock_server.py"})
 
 # This file has to name the German words it looks for.
-SELF = Path(__file__).resolve()
+SELF = Path(__file__).name
+
+# Directories that hold generated or vendored copies of the sources. Scanning
+# them says nothing about what is written in this repository.
+GENERATED_DIRS = frozenset({".git", ".tox", ".venv", "venv", "build", "dist", "__pycache__"})
 
 # Words that only appear in German prose. Deliberately not "in", "die" or "der":
 # those collide with English or with identifiers.
@@ -64,9 +73,10 @@ def _python_sources() -> list[Path]:
     return sorted(
         path
         for path in REPO.rglob("*.py")
-        if ".git" not in path.parts
-        and path not in CONTROLLER_VERBATIM
-        and path.resolve() != SELF
+        if not (GENERATED_DIRS & set(path.parts))
+        and not any(part.endswith(".egg-info") for part in path.parts)
+        and path.name not in CONTROLLER_VERBATIM
+        and path.name != SELF
     )
 
 
@@ -105,6 +115,18 @@ def test_the_controller_strings_stay_german() -> None:
     const_api = (PACKAGE / "const_api.py").read_text(encoding="utf-8")
 
     assert "Filterdrucküberwachung (Druck zu niedrig)" in const_api
+
+
+def test_generated_copies_are_not_scanned() -> None:
+    """A built wheel is not source, and scanning its copy fails the release.
+
+    `python -m build` writes `build/lib/<package>/`, so the release job runs
+    the checks with a duplicate of every module on disk.
+    """
+    scanned = {path.name for path in _python_sources()}
+
+    assert "const_api.py" not in scanned
+    assert not [path for path in _python_sources() if "build" in path.parts]
 
 
 def test_the_policy_is_written_down() -> None:
