@@ -83,10 +83,17 @@ def test_python_sources_are_english(path: Path) -> None:
 
 
 def test_the_changelog_is_english() -> None:
-    """The changelog is what a consumer reads when a version breaks something."""
-    changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    """The changelog is what a consumer reads when a version breaks something.
 
-    assert not _GERMAN.search(changelog)
+    Code spans are quotations, not prose: an entry that removes a German string
+    has to be able to name the string it removed.
+    """
+    changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    prose = re.sub(r"`[^`]*`", "", changelog)
+
+    offenders = sorted({match.group(0).lower() for match in _GERMAN.finditer(prose)})
+
+    assert not offenders, f"German outside code spans in CHANGELOG.md: {offenders}"
 
 
 def test_the_controller_strings_stay_german() -> None:
