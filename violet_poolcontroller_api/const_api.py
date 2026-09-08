@@ -157,6 +157,11 @@ API_RATE_LIMIT_REQUESTS = 10  # Max requests per window
 API_RATE_LIMIT_WINDOW = 1.0  # Window duration in seconds
 API_RATE_LIMIT_BURST = 3  # Number of burst requests allowed
 API_RATE_LIMIT_RETRY_AFTER = 0.1  # Wait time after exceeding the limit
+# How long a request waits for a rate-limit token before it is given up on.
+# Waiting longer than this means the caller is queued behind a backlog the
+# controller cannot drain; the request fails instead of being sent without a
+# token, which would defeat the limiter exactly when it is needed most.
+API_RATE_LIMIT_WAIT_TIMEOUT = 10.0
 
 # Priority levels for API requests
 API_PRIORITY_CRITICAL = 1  # For state changes and critical operations
@@ -184,19 +189,19 @@ SWITCH_FUNCTIONS = {
 # Dynamically add extension relays
 for ext_bank in [1, 2]:
     for relay_num in range(1, 9):
-        SWITCH_FUNCTIONS[f"EXT{ext_bank}_{relay_num}"] = f"Erweiterung {ext_bank}.{relay_num}"
+        SWITCH_FUNCTIONS[f"EXT{ext_bank}_{relay_num}"] = f"Extension {ext_bank}.{relay_num}"
 
 DMX_SCENE_COUNT = 12  # Number of DMX scenes supported by the controller
 
 # Dynamically add DMX scenes
 for scene_num in range(1, DMX_SCENE_COUNT + 1):
-    SWITCH_FUNCTIONS[f"DMX_SCENE{scene_num}"] = f"DMX Szene {scene_num}"
+    SWITCH_FUNCTIONS[f"DMX_SCENE{scene_num}"] = f"DMX scene {scene_num}"
 
 # Dynamically add digital input rules (controller exposes SWITCHINGRULE_1..8
 # internally; we surface them as DIRULE_1..8 in line with the controller's
 # DIGITALINPUTRULE_STATE_DIGITALINPUT_RULE_1..8 keys – see setFunctionManually.js).
 for rule_num in range(1, 9):
-    SWITCH_FUNCTIONS[f"DIRULE_{rule_num}"] = f"Schaltregel {rule_num}"
+    SWITCH_FUNCTIONS[f"DIRULE_{rule_num}"] = f"Switching rule {rule_num}"
 
 # Dynamically add Omni DC outputs
 for dc_num in range(6):
@@ -341,6 +346,34 @@ SYSTEM_SERVICES: dict[str, dict[str, str]] = {
         "label": "Support tunnel",
     },
 }
+
+# =============================================================================
+# NON-RETRYABLE ENDPOINTS
+# =============================================================================
+# The controller applies most state changes through GET requests, so "is this
+# a GET?" is the wrong question to ask before repeating a request.  A command
+# that timed out may well have been applied, and repeating it is not harmless:
+# the digital-rule trigger and the cover commands are PUSH toggles, so a retry
+# undoes the change or moves the cover a second time; initUpdate and
+# setOutputTestmode are not idempotent either.
+#
+# Requests to these paths are therefore sent exactly once, whatever their HTTP
+# method.  Reads stay retryable - repeating them costs nothing.
+NON_RETRYABLE_ENDPOINTS: frozenset[str] = frozenset(
+    {
+        API_SET_FUNCTION_MANUALLY,
+        API_SET_OUTPUT_TESTMODE,
+        API_SET_RS485_LIVE,
+        API_RESET_BLOCKING,
+        API_INIT_UPDATE,
+        API_SET_CONFIG,
+        API_SET_CAN_AMOUNT,
+        API_TRIGGER_MANUAL_DOSING,
+        API_RESTORE_CALIBRATION,
+    }
+    | {service["enable_endpoint"] for service in SYSTEM_SERVICES.values()}
+    | {service["disable_endpoint"] for service in SYSTEM_SERVICES.values()}
+)
 
 # =============================================================================
 # CONTROLLER ERROR CODES (Manual Section 27.2 - Software 1.1.9)

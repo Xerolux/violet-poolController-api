@@ -54,6 +54,7 @@ class DosingMixin(APIClientMixin):
         action: str,
         *,
         duration: int | None = None,
+        source: int = 1,
     ) -> dict[str, Any]:
         """Trigger or stop a manual dosing run via /triggerManualDosing.
 
@@ -67,6 +68,9 @@ class DosingMixin(APIClientMixin):
             action: ON/START → DOSSTART; OFF/STOP/AUTO → DOSSTOP
                 (stopping a run returns the channel to automatic mode).
             duration: Duration in seconds (whole number).
+            source: Value of the firmware's ``from`` form field, which selects
+                the chemical on channels shared by more than one agent.  The
+                default (1) addresses the channel's primary agent.
 
         Returns:
             A dictionary with the command result.
@@ -103,7 +107,7 @@ class DosingMixin(APIClientMixin):
             "action": dos_action,
             "output": str(output_index),
             "runtime": str(dos_duration),
-            "from": "1",
+            "from": str(int(source)),
             "runtime_formatted": f"{dos_duration // 60:02d}:{dos_duration % 60:02d}",
         }
         body = await self._request(
@@ -111,6 +115,7 @@ class DosingMixin(APIClientMixin):
             method="POST",
             data=form_data,
             priority=API_PRIORITY_CRITICAL,
+            retryable=False,
         )
         return self._command_result(body)
 
@@ -132,6 +137,10 @@ class DosingMixin(APIClientMixin):
         if not device_key:
             msg = f"Unknown dosing type: {dosing_type}"
             raise VioletPoolAPIError(msg)
+
+        # Validate before comparing: a non-numeric duration used to raise a
+        # bare TypeError from the ``duration <= 0`` test below.
+        duration = validate_duration(duration, minimum=0)
 
         # /triggerManualDosing requires an explicit runtime; duration <= 0
         # stops a running manual dosing instead (documented behavior).
@@ -219,7 +228,9 @@ class DosingMixin(APIClientMixin):
         """
         numeric_value = _to_float(key, value)
         validate_setpoint(key, numeric_value)
-        return await self.set_config({key: value})
+        # Send the validated number, not the original: a string like " 28.5 "
+        # would otherwise reach the controller unparsed.
+        return await self.set_config({key: numeric_value})
 
     async def set_dosing_parameters(
         self,

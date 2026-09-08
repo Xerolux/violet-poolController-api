@@ -12,6 +12,7 @@ from .const_api import (
     API_GET_OUTPUT_STATES,
     API_GET_OVERALL_DOSING,
     API_GET_WEATHER_DATA,
+    API_PRIORITY_LOW,
     API_READINGS,
 )
 from .readings import VioletReadings
@@ -187,6 +188,8 @@ class ReadingsMixin(APIClientMixin):
             API_GET_HISTORY,
             params=params,
             payload_name="getHistory",
+            # Statistics must never queue ahead of a state change.
+            priority=API_PRIORITY_LOW,
         )
 
     async def get_weather_data(self) -> dict[str, Any]:

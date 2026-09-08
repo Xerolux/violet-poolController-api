@@ -25,7 +25,11 @@ classifiers = [
     "Topic :: Home Automation",
 ]
 dependencies = [
-    "aiohttp>=3.11.0,<3.15",
+    # No upper bound on purpose: Home Assistant installs this package into
+    # its own environment and follows aiohttp closely.  A "<3.15" cap made pip
+    # refuse the install the day HA moved past it, taking the integration down
+    # with it.  Compatibility with newer aiohttp is handled in the test shim.
+    "aiohttp>=3.11.0",
 ]
 
 [project.optional-dependencies]

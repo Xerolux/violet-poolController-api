@@ -10,7 +10,7 @@
 
 An asynchronous Python client for interacting with the **Violet Pool Controller**.
 
-This library is primarily designed to power the official [Violet Pool Controller Home Assistant Integration](https://github.com/Xerolux/violet-hass), but it can be used independently for any Python project that needs to fetch readings or control a Violet Pool system.
+This library is primarily designed to power the [Violet Pool Controller Home Assistant Integration](https://github.com/Xerolux/violet-hass), but it can be used independently for any Python project that needs to fetch readings or control a Violet Pool system.
 
 > **📖 Documentation:**
 > - GitHub Pages: https://xerolux.github.io/violet-poolController-api/
@@ -87,7 +87,7 @@ The API client includes many more functions tailored to the Violet Controller:
 - `set_pv_surplus(active=True)`: Enable the PV-Surplus mode.
 - `manual_dosing(dosing_type="Chlor", duration=120)`: Trigger manual chemical dosing.
 
-For a full list of available commands and more detailed examples, please refer to the [Wiki](https://github.com/Xerolux/violet-poolController-api/wiki) or the source code in `api.py`.
+For a full list of available commands and more detailed examples, please refer to the [Wiki](https://github.com/Xerolux/violet-poolController-api/wiki) or the `_api_*.py` mixins, which hold the public methods.
 
 ## Violet Dosing Standalone Mode
 
@@ -106,7 +106,7 @@ api = VioletPoolAPI(
 In this mode, dosing functions (for example `manual_dosing` and dosing parameter/target updates) stay available, while base-module-only switch functions (for example pump/light/backwash) are blocked with a clear error message.
 
 **Note on getReadings format:**
-As of version `0.0.7`, the API client automatically detects and normalizes the payload output from the controller. Whether your Violet Controller returns the classic base-module `dict` structure (`{"PUMPSTATE": "2", "PH": 7.2}`) or the new standalone `list` structure, the `get_readings()` and `get_specific_readings()` functions will always return a seamless, flattened key-value dictionary. Your Home Assistant integration or downstream application will work uniformly with both formats without requiring any extra code!
+As of version `0.0.7`, the API client automatically detects and normalizes the payload output from the controller. Whether your Violet Controller returns the classic base-module `dict` structure (`{"PUMPSTATE": "2", "PH": 7.2}`) or the new standalone `list` structure, the `get_readings()` and `get_specific_readings()` functions always return a flattened key-value view. `get_readings()` returns a `VioletReadings`, a read-only `Mapping` with typed accessors on top; use `dict(readings)` where a plain `dict` is required, for example before JSON serialization. Your Home Assistant integration or downstream application will work uniformly with both formats without requiring any extra code!
 
 **Hardware Profile Detection:**
 As of the latest release, the API client provides a method to detect the specific hardware configuration of your Violet Controller.
@@ -122,7 +122,7 @@ print(profile)
 #     "extension_module_2": False,
 # }
 ```
-This detection parses `get_readings()` to check for the presence of certain internal status parameters (`SYSTEM_dosagemodule_cpu_temperature`, `EXT1_1`, `EXT2_1`), allowing your application to dynamically adapt to the connected modules (Base Module, Dosing Module, Relay Extension 1 and 2). By utilizing this detection, developers and integrations can accurately filter out features for missing hardware, ensuring that only supported options are exposed to the user.
+This detection reads the controller's own module counters (`SYSTEM_dosagemodule_alive_count`, `SYSTEM_ext1module_alive_count`, `SYSTEM_ext2module_alive_count`), allowing your application to dynamically adapt to the connected modules (Base Module, Dosing Module, Relay Extension 1 and 2). By utilizing this detection, developers and integrations can accurately filter out features for missing hardware, ensuring that only supported options are exposed to the user.
 
 ## Mock Server (Testing Without Hardware)
 
@@ -199,7 +199,7 @@ GNU Affero General Public License v3.0 or later (AGPLv3+)
 
 The **VIOLET Pool Controller** by [PoolDigital GmbH & Co. KG](https://www.pooldigital.de/) is a premium smart pool automation system developed in Germany, featuring a JSON API for seamless Home Assistant integration.
 
-- **Offizieller Shop:** [pooldigital.de](https://www.pooldigital.de/)
+- **Official shop:** [pooldigital.de](https://www.pooldigital.de/)
 - **Community:** [PoolDigital Forum](http://forum.pooldigital.de/)
 
 **Disclaimer:**

@@ -64,6 +64,24 @@ GERMAN_WORDS = (
     "dieser",
     "keine",
     "sollte",
+    # Added after 0.0.38 shipped with ~20 German docstrings and log lines in
+    # utils_sanitizer.py and utils_rate_limiter.py that this list did not see.
+    "einen",
+    "eine",
+    "verwende",
+    "ungültig",
+    "ungültige",
+    "ungültigen",
+    "ungültiger",
+    "verfügbar",
+    "gefährlich",
+    "gefährliche",
+    "erlaubt",
+    "erlaubter",
+    "zurückgesetzt",
+    "initialisiert",
+    "unbekannter",
+    "warte",
 )
 _GERMAN = re.compile(r"\b(" + "|".join(GERMAN_WORDS) + r")\b", re.IGNORECASE)
 

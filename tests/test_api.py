@@ -274,11 +274,56 @@ async def test_set_config_sanitizes_payload_before_request(
 
     monkeypatch.setattr(api_client, "_request", fake_request)
 
-    result = await api_client.set_config({"pool mode": "A<mode>", "speed": 3.7})
+    result = await api_client.set_config({"POOL_MODE": "A<mode>", "speed": 3.7})
 
     assert result["success"] is True
     assert result["response"] == "OK"
-    assert captured["data"] == {"poolmode": "A<mode>", "speed": 3.7}
+    assert captured["data"] == {"POOL_MODE": "A<mode>", "speed": 3.7}
+
+
+@pytest.mark.asyncio
+async def test_set_config_rejects_invalid_key_instead_of_rewriting_it(
+    api_client: VioletPoolAPI,
+    monkeypatch: pytest.Monkeypatch,
+) -> None:
+    """A malformed key is an error, never a silent write to a different key.
+
+    ``"pool mode"`` used to be rewritten to ``"poolmode"`` and sent, so a typo
+    in a configuration key changed a setting the caller never named.
+    """
+    sent = False
+
+    async def fake_request(_endpoint: str, **_kwargs: Any) -> str:  # noqa: ANN401
+        nonlocal sent
+        sent = True
+        return "OK"
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    with pytest.raises(VioletPoolAPIError, match="Invalid configuration parameter"):
+        await api_client.set_config({"pool mode": "A"})
+
+    assert sent is False
+
+
+@pytest.mark.asyncio
+async def test_set_config_rejects_unsupported_value_types(
+    api_client: VioletPoolAPI,
+    monkeypatch: pytest.Monkeypatch,
+) -> None:
+    """None and containers must not reach the controller as "None" or "1 2"."""
+
+    async def fake_request(_endpoint: str, **_kwargs: Any) -> str:  # noqa: ANN401
+        return "OK"
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+
+    for bad_value in (None, [1, 2], {"a": 1}):
+        with pytest.raises(VioletPoolAPIError):
+            await api_client.set_config({"SOME_KEY": bad_value})
+
+    with pytest.raises(VioletPoolAPIError, match="Non-finite"):
+        await api_client.set_config({"SOME_KEY": float("nan")})
 
 
 @pytest.mark.asyncio
@@ -1383,14 +1428,20 @@ async def test_command_result_dosing_started(
 
 
 @pytest.mark.asyncio
-async def test_command_result_dict_passthrough(
+async def test_command_result_normalizes_dict_input(
     api_client: VioletPoolAPI,
 ) -> None:
-    """Test _command_result passes dict through unchanged."""
+    """A dict body is normalized, so ``success`` is always present.
+
+    The old passthrough returned the dict unchanged, so a caller reading
+    ``result["success"]`` got a KeyError instead of a result.
+    """
     data = {"key": "value", "nested": {"a": 1}}
     result = VioletPoolAPI._command_result(data)
 
-    assert result is data
+    assert result["success"] is True
+    assert result["key"] == "value"
+    assert result["nested"] == {"a": 1}
 
 
 @pytest.mark.asyncio
@@ -2130,3 +2181,163 @@ def test_input_sanitizer_no_duplicate_validate_duration() -> None:
 
     assert not hasattr(InputSanitizer, "validate_duration")
     assert not hasattr(InputSanitizer, "validate_speed")
+
+
+def _request_count(mocked: aioresponses, method: str, path: str) -> int:
+    """Count recorded requests to *path*, ignoring query-string normalization.
+
+    yarl rewrites a value-less query (``?PUMP,ON,0,0``) by appending ``=``, so
+    the recorded key never equals the URL that was requested.
+    """
+    return sum(
+        len(calls)
+        for (recorded_method, url), calls in mocked.requests.items()
+        if recorded_method == method and url.path == path
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression: state-changing commands are sent exactly once (0.0.39)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_switch_command_is_not_retried(
+    mock_aioresponse: aioresponses,
+) -> None:
+    """A failed switch command must not be repeated.
+
+    The controller applies state changes through GET, and a request that
+    timed out may well have been applied.  Repeating it can toggle the output
+    back or apply it a second time.
+    """
+    url = "http://192.168.1.100/setFunctionManually?PUMP,ON,0,0"
+    mock_aioresponse.get(url, status=500, body="boom")
+
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(host="192.168.1.100", session=session, max_retries=3)
+        with pytest.raises(VioletPoolAPIError):
+            await api.set_switch_state("PUMP", "ON")
+
+    assert _request_count(mock_aioresponse, "GET", "/setFunctionManually") == 1
+
+
+@pytest.mark.asyncio
+async def test_digital_rule_trigger_is_not_retried(
+    mock_aioresponse: aioresponses,
+) -> None:
+    """PUSH is a toggle: a retry would undo the change it just made."""
+    url = "http://192.168.1.100/setFunctionManually?DIRULE_1,PUSH,0,0"
+    mock_aioresponse.get(url, status=500, body="boom")
+
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(host="192.168.1.100", session=session, max_retries=3)
+        with pytest.raises(VioletPoolAPIError):
+            await api.trigger_digital_input_rule("DIRULE_1")
+
+    assert _request_count(mock_aioresponse, "GET", "/setFunctionManually") == 1
+
+
+@pytest.mark.asyncio
+async def test_init_update_is_not_retried(
+    mock_aioresponse: aioresponses,
+) -> None:
+    """Starting a firmware update twice is not harmless."""
+    url = "http://192.168.1.100/initUpdate"
+    mock_aioresponse.get(url, status=503, body="busy")
+
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(host="192.168.1.100", session=session, max_retries=3)
+        with pytest.raises(VioletPoolAPIError):
+            await api.init_update()
+
+    assert _request_count(mock_aioresponse, "GET", "/initUpdate") == 1
+
+
+@pytest.mark.asyncio
+async def test_reads_are_still_retried(
+    mock_aioresponse: aioresponses,
+) -> None:
+    """The read path keeps its retries; repeating a read costs nothing."""
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, status=500, body="boom")
+    mock_aioresponse.get(url, status=500, body="boom")
+    mock_aioresponse.get(url, payload={"getReadings": {"PUMP": "1"}}, status=200)
+
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(host="192.168.1.100", session=session, max_retries=3)
+        readings = await api.get_readings()
+
+    assert readings["PUMP"] == "1"
+    assert _request_count(mock_aioresponse, "GET", "/getReadings") == 3
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_wait_timeout_fails_instead_of_bypassing(
+    mock_aioresponse: aioresponses,
+    monkeypatch: pytest.Monkeypatch,
+) -> None:
+    """A limiter timeout must fail the request, not send it without a token.
+
+    Sending anyway let every caller that waited out the timeout hit the
+    controller at once, which is the pile-up the limiter exists to prevent.
+    """
+    url = "http://192.168.1.100/getReadings?ALL"
+    mock_aioresponse.get(url, payload={"getReadings": {}}, status=200)
+
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(host="192.168.1.100", session=session, max_retries=1)
+
+        async def always_timeout(**_kwargs: Any) -> None:
+            raise TimeoutError
+
+        monkeypatch.setattr(api._rate_limiter, "wait_if_needed", always_timeout)
+
+        with pytest.raises(VioletPoolAPIError, match="Rate limit wait"):
+            await api.get_readings()
+
+    assert _request_count(mock_aioresponse, "GET", "/getReadings") == 0
+
+
+@pytest.mark.asyncio
+async def test_html_login_page_does_not_open_the_circuit_breaker(
+    mock_aioresponse: aioresponses,
+) -> None:
+    """A captive portal answers 200 with HTML every time, deterministically.
+
+    Counting those as transient failures opened the breaker and replaced the
+    payload error that explains the actual problem.
+    """
+    url = "http://192.168.1.100/getReadings?ALL"
+    for _ in range(8):
+        mock_aioresponse.get(url, body="<html>login</html>", status=200)
+
+    async with aiohttp.ClientSession() as session:
+        api = VioletPoolAPI(host="192.168.1.100", session=session, max_retries=1)
+        for _ in range(8):
+            with pytest.raises(VioletPoolAPIError) as excinfo:
+                await api.get_readings()
+            assert "Invalid JSON payload" in str(excinfo.value)
+
+
+def test_hostname_error_never_echoes_credentials() -> None:
+    """The message reaches config-flow errors and logs; it must stay clean."""
+    with pytest.raises(ValueError, match="must not contain credentials") as excinfo:
+        VioletPoolAPI._build_secure_base_url(
+            VioletPoolAPI,
+            "http://admin:s3cret@192.168.1.5",
+            use_ssl=False,
+        )
+
+    assert "s3cret" not in str(excinfo.value)
+
+
+def test_hostname_accepts_underscores() -> None:
+    """mDNS and router-assigned names use underscores."""
+    url = VioletPoolAPI._build_secure_base_url(
+        VioletPoolAPI,
+        "violet_pool.local",
+        use_ssl=False,
+    )
+
+    assert url == "http://violet_pool.local"

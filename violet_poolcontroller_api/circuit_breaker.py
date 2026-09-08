@@ -166,8 +166,11 @@ class CircuitBreaker:
                 if is_half_open_probe or self.failure_count >= self.failure_threshold:
                     self.state = CircuitBreakerState.OPEN
                     _LOGGER.warning(
-                        "Circuit breaker OPENED due to %d failures",
-                        self.failure_threshold,
+                        "Circuit breaker OPENED after %d failure(s) (%s)",
+                        self.failure_count,
+                        "half-open probe failed"
+                        if is_half_open_probe
+                        else f"threshold {self.failure_threshold} reached",
                     )
 
             raise
@@ -192,9 +195,12 @@ class CircuitBreaker:
             return result
 
     def get_stats(self) -> dict[str, Any]:
-        """Get circuit breaker statistics (thread-safe snapshot)."""
-        if self._lock.locked():
-            return {"state": self.state, "note": "lock held, stats may be stale"}
+        """Get circuit breaker statistics.
+
+        Every ``async with self._lock`` body in this class is synchronous, so
+        the lock is never held across an await and a caller on the same event
+        loop always observes a consistent snapshot.
+        """
         return {
             "state": self.state,
             "failure_count": self.failure_count,

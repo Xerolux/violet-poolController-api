@@ -17,6 +17,7 @@ from .const_api import (
     API_GET_UPDATE_STATE,
     API_INIT_UPDATE,
     API_PRIORITY_CRITICAL,
+    API_PRIORITY_LOW,
     API_PRIORITY_NORMAL,
     API_RESET_BLOCKING,
     ERROR_CODES,
@@ -65,7 +66,7 @@ class SystemMixin(APIClientMixin):
             message = info["message"]
         else:
             severity = ERROR_SEVERITY_WARNING
-            message = subject or f"Unbekannter Fehlercode {code}"
+            message = subject or f"Unknown error code {code}"
 
         return {
             "code": code,
@@ -150,11 +151,13 @@ class SystemMixin(APIClientMixin):
         resp = await self._request(
             API_GET_LOG,
             query=query,
-            priority=API_PRIORITY_NORMAL,
+            priority=API_PRIORITY_LOW,
         )
         text = resp.strip() if resp else ""
-        lines = text.split("\n") if text else []
-        has_more = lines and lines[-1].strip() == "LOAD_MORE"
+        # splitlines() also handles the CRLF the controller sends, which
+        # str.split("\n") left as a trailing "\r" on every line.
+        lines = text.splitlines()
+        has_more = bool(lines) and lines[-1].strip() == "LOAD_MORE"
         if has_more:
             lines = lines[:-1]
         lines = [ln for ln in lines if ln.strip()]
@@ -195,6 +198,7 @@ class SystemMixin(APIClientMixin):
             API_RESET_BLOCKING,
             method="GET",
             priority=API_PRIORITY_CRITICAL,
+            retryable=False,
         )
         return self._command_result(body)
 
@@ -238,6 +242,7 @@ class SystemMixin(APIClientMixin):
             endpoint,
             method="GET",
             priority=API_PRIORITY_CRITICAL,
+            retryable=False,
         )
         return self._command_result(body)
 
@@ -282,8 +287,9 @@ class SystemMixin(APIClientMixin):
         Wraps ``GET /getLiveTrace``.  The controller returns a 3-line
         text/plain body (header row, units row, values row) with
         semicolon-separated fields and German decimal commas.  This method
-        splits the rows and zips header→value into a dict (parsing values
-        as ``float`` when possible, falling back to the raw string).
+        splits the rows, zips header->value into a dict and converts the
+        decimal comma so the values parse as numbers; the values themselves
+        are returned as strings.
 
         Useful for ad-hoc troubleshooting dashboards – the controller does
         not document this endpoint as stable, so prefer the typed
@@ -336,6 +342,7 @@ class SystemMixin(APIClientMixin):
             API_INIT_UPDATE,
             method="GET",
             priority=API_PRIORITY_CRITICAL,
+            retryable=False,
         )
         return str(resp).strip() if resp else ""
 
@@ -375,6 +382,6 @@ class SystemMixin(APIClientMixin):
         resp = await self._request(
             API_GET_UPDATE_HISTORY,
             method="GET",
-            priority=API_PRIORITY_NORMAL,
+            priority=API_PRIORITY_LOW,
         )
         return str(resp).strip() if resp else ""

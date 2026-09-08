@@ -73,7 +73,11 @@ jobs:
             /tmp/wiki
 
       - name: Synchronize documentation
-        run: rsync -av --delete --exclude ".git" docs/ /tmp/wiki/
+        # Only Markdown pages belong in the wiki. Copying index.html and
+        # getReadings_clean.json published files the wiki cannot render.
+        run: >-
+          rsync -av --delete --exclude ".git" --exclude "*.html"
+          --exclude "*.json" --exclude "*.css" docs/ /tmp/wiki/
 
       - name: Commit and push changes
         working-directory: /tmp/wiki

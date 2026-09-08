@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .const_api import API_PRIORITY_NORMAL
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
@@ -35,6 +37,7 @@ class APIClientMixin:
         params: Mapping[str, Any] | None = None,
         query: str | None = None,
         payload_name: str,
+        priority: int = API_PRIORITY_NORMAL,
     ) -> dict[str, Any]:
         raise NotImplementedError
 

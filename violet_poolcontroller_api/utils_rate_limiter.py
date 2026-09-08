@@ -22,7 +22,6 @@ import asyncio
 import heapq
 import logging
 import time
-from collections import deque
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ class RateLimiter:
     - Maximale Requests pro Zeitfenster
     - Burst support for short spikes
     - Priority queue for critical requests
-    - Graceful Degradation bei Limit-Überschreitung
+    - Graceful degradation once the limit is exceeded
     """
 
     def __init__(
@@ -51,8 +50,8 @@ class RateLimiter:
         Args:
             max_requests: Maximale Anzahl Requests pro Zeitfenster
             time_window: Zeitfenster in Sekunden
-            burst_size: Erlaubte Burst-Größe (zusätzliche Requests)
-            retry_after: Wartezeit in Sekunden bei Limit-Überschreitung
+            burst_size: Allowed burst size (extra requests).
+            retry_after: Seconds to wait once the limit is exceeded.
 
         """
         if max_requests <= 0:
@@ -74,13 +73,8 @@ class RateLimiter:
         self.max_tokens = max_requests + burst_size
         self.last_refill = time.monotonic()
 
-        # Optimized request history with size and time limits
-        self.request_history: deque = deque(maxlen=500)
         self.blocked_requests = 0
         self.total_requests = 0
-        self._last_known_tokens = 0.0
-        self.history_cleanup_interval = 300  # 5 minutes
-        self.last_cleanup_time = time.monotonic()
 
         # Memory-efficient statistics
         self._recent_stats = {
@@ -95,7 +89,7 @@ class RateLimiter:
         self._waiter_sequence = 0
 
         _LOGGER.debug(
-            "Rate Limiter initialisiert: %d req/%ss (burst: %d)",
+            "Rate limiter initialized: %d req/%ss (burst: %d)",
             max_requests,
             time_window,
             burst_size,
@@ -122,37 +116,19 @@ class RateLimiter:
 
     def _record_request(self, current_time: float) -> None:
         self.total_requests += 1
-        if current_time - self.last_cleanup_time > self.history_cleanup_interval:
-            self._cleanup_history(current_time)
-            self.last_cleanup_time = current_time
         self._reset_recent_stats_if_needed(current_time)
         self._recent_stats["requests_last_minute"] += 1
 
     def _record_blocked_request(self) -> None:
         self.blocked_requests += 1
         self._recent_stats["blocked_last_minute"] += 1
-        self._last_known_tokens = self.tokens
 
-    def _consume_token(self, priority: int, current_time: float) -> bool:
+    def _consume_token(self, priority: int, current_time: float) -> bool:  # noqa: ARG002
         self._refill_tokens(current_time)
         if self.tokens < 1:
-            self._last_known_tokens = self.tokens
             return False
         self.tokens -= 1
-        self.request_history.append(
-            {"time": current_time, "priority": priority, "blocked": False},
-        )
         return True
-
-    def _cleanup_history(self, current_time: float) -> None:
-        """Clean up old history entries to prevent memory leaks."""
-        # Remove entries older than 1 hour
-        cutoff_time = current_time - 3600
-
-        while self.request_history and self.request_history[0]["time"] <= cutoff_time:
-            self.request_history.popleft()
-
-        _LOGGER.debug("Rate limiter history cleanup completed")
 
     def _reset_recent_stats_if_needed(self, current_time: float) -> None:
         """Reset recent statistics after their rolling window expires."""
@@ -162,11 +138,11 @@ class RateLimiter:
             self._recent_stats["last_minute_reset"] = current_time
 
     async def wait_if_needed(self, priority: int = 3, timeout: float = 10.0) -> None:  # noqa: ASYNC109
-        """Warte bis ein Token verfügbar ist.
+        """Wait until a token is available.
 
         Args:
-            priority: Request-Priorität
-            timeout: Maximale Wartezeit in Sekunden
+            priority: The request priority.
+            timeout: Maximum time to wait, in seconds.
 
         Raises:
             TimeoutError: If the timeout is reached
@@ -229,7 +205,7 @@ class RateLimiter:
                             self._waiters[0][2].set()
 
     def _refill_tokens(self, current_time: float) -> None:
-        """Fülle Token-Bucket basierend auf verstrichener Zeit."""
+        """Refill the token bucket according to the elapsed time."""
         time_passed = current_time - self.last_refill
 
         # Refill proportional to time passed, not just when full window elapsed
@@ -242,8 +218,18 @@ class RateLimiter:
             self.last_refill = current_time
 
     def get_stats(self) -> dict:
-        """Hole Rate-Limiter-Statistiken."""
+        """Return a snapshot of the limiter's counters.
+
+        ``current_tokens`` is computed for *now* without mutating the bucket;
+        reading ``self.tokens`` directly reported a stale value that looked
+        like an exhausted limiter after an idle period.
+        """
         current_time = time.monotonic()
+        refill_rate = self.max_requests / self.time_window
+        tokens_now = min(
+            float(self.max_tokens),
+            self.tokens + max(0.0, current_time - self.last_refill) * refill_rate,
+        )
         recent_window_expired = (
             current_time - self._recent_stats["last_minute_reset"] > _STATS_WINDOW_SECONDS
         )
@@ -257,7 +243,7 @@ class RateLimiter:
             "recent_blocked_1min": (
                 0 if recent_window_expired else self._recent_stats["blocked_last_minute"]
             ),
-            "current_tokens": self.tokens,
+            "current_tokens": tokens_now,
             "max_tokens": self.max_tokens,
             "block_rate": (
                 self.blocked_requests / self.total_requests * 100 if self.total_requests > 0 else 0
@@ -265,18 +251,17 @@ class RateLimiter:
         }
 
     def reset(self) -> None:
-        """Setze Rate Limiter zurück."""
+        """Reset the rate limiter."""
         self.tokens = float(self.max_tokens)
         self.last_refill = time.monotonic()
         self.blocked_requests = 0
         self.total_requests = 0
-        self.request_history.clear()
         for _, _, event in self._waiters:
             event.set()
         self._recent_stats["requests_last_minute"] = 0
         self._recent_stats["blocked_last_minute"] = 0
         self._recent_stats["last_minute_reset"] = time.monotonic()
-        _LOGGER.debug("Rate Limiter zurückgesetzt")
+        _LOGGER.debug("Rate limiter reset")
 
 
 # Global rate limiter instance (one can also be created per API instance)
