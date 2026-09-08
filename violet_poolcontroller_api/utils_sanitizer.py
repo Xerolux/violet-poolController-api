@@ -35,7 +35,7 @@ _MAX_API_PARAM_LENGTH = 100
 class InputSanitizer:
     """Input sanitization for security and data integrity.
 
-    Schützt vor:
+    Protects against:
     - XSS (Cross-Site Scripting)
     - SQL injection (not relevant for an HTTP API, but defended against)
     - Command Injection
@@ -51,7 +51,7 @@ class InputSanitizer:
     INTEGER = re.compile(r"^-?[0-9]+$")
     FLOAT = re.compile(r"^-?[0-9]+\.[0-9]+$")
 
-    # Gefährliche Patterns
+    # Dangerous patterns
     DANGEROUS_CHARS = re.compile(r'[<>&"\';\\]')
     PATH_TRAVERSAL = re.compile(r"\.\.|/|\\")
     COMMAND_INJECTION = re.compile(r"[;&|`$(){}[\]]")
@@ -64,19 +64,19 @@ class InputSanitizer:
         allow_special_chars: bool = False,
         escape_html: bool = True,
     ) -> str:
-        """Sanitize einen String-Wert.
+        """Sanitize a string value.
 
         Args:
-            value: Zu sanitisierender Wert
-            max_length: Maximale Länge
+            value: The value to convert.
+            max_length: Maximum length.
             allow_special_chars: Erlaube Sonderzeichen (sonst nur alphanumerisch)
-            escape_html: HTML-Escape durchführen
+            escape_html: Whether to HTML-escape the result.
 
         Returns:
             Sanitisierter String
 
         Raises:
-            ValueError: Bei ungültigen Eingaben
+            ValueError: If the input is invalid.
 
         """
         if value is None:
@@ -89,7 +89,7 @@ class InputSanitizer:
         # Normalized Form Compatibility Decomposition
         str_value = unicodedata.normalize("NFKD", str_value)
 
-        # Längen-Validierung
+        # Length validation
         if len(str_value) > max_length:
             _LOGGER.warning(
                 "String too long (%d > %d), truncating: %s...",
@@ -104,7 +104,7 @@ class InputSanitizer:
             str_value = re.sub(r"[^a-zA-Z0-9 _-]", "", str_value)
             if str_value != original:
                 _LOGGER.warning(
-                    "Gefährliche Zeichen entfernt: '%s' → '%s'",
+                    "Removed dangerous characters: '%s' -> '%s'",
                     original,
                     str_value,
                 )
@@ -115,45 +115,55 @@ class InputSanitizer:
 
     @staticmethod
     def sanitize_numeric(value: Any) -> float:  # noqa: ANN401
-        """Sanitize a numeric value.
+        """Return *value* as a finite float, or 0.0 if it is not a number.
+
+        A single comma is read as a decimal separator before anything else,
+        because the controller emits German-formatted numbers in places
+        (``getLiveTrace``).  Without that step the digit-extraction fallback
+        below turned ``"1,5"`` into ``15.0`` - a different number, silently.
+
+        A value carrying a unit (``"12.5 mL"``) still yields its number; a
+        string whose digits do not form a valid float (``"1.2.3"``) yields the
+        0.0 default.
 
         Args:
-            value: Zu sanitisierender numerischer Wert
+            value: The value to convert.
 
         Returns:
-            Sanierte Fließkommazahl
+            The value as a finite float, or 0.0.
 
         """
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if not math.isfinite(float(value)):
+                _LOGGER.warning("Non-finite numeric value: %s", value)
+                return 0.0
+            return float(value)
+
+        str_value = str(value).strip()
+        # Decimal comma first, so the fallback never concatenates the parts.
+        if str_value.count(",") == 1 and "." not in str_value:
+            str_value = str_value.replace(",", ".")
+
         try:
-            if isinstance(value, (int, float)):
-                if not math.isfinite(float(value)):
-                    _LOGGER.warning("Unendlicher/NaN-Wert: %s", value)
-                    return 0.0
-                return float(value)
+            parsed = float(str_value)
+        except (ValueError, TypeError, OverflowError):
+            parsed = None
 
-            str_value = str(value).strip()
-            try:
-                parsed = float(str_value)
-            except ValueError:
-                pass
-            else:
-                if not math.isfinite(parsed):
-                    _LOGGER.warning("Unendlicher/NaN-Wert: %s", value)
-                    return 0.0
-                return parsed
-
+        if parsed is None:
             has_minus = str_value.startswith("-")
             cleaned = re.sub(r"[^0-9.]", "", str_value)
             if has_minus and cleaned:
-                cleaned = "-" + cleaned
-
-            if not cleaned:
+                cleaned = f"-{cleaned}"
+            try:
+                parsed = float(cleaned)
+            except (ValueError, TypeError, OverflowError):
+                _LOGGER.warning("Invalid numeric value: %s", value)
                 return 0.0
 
-            return float(cleaned)
-        except (ValueError, TypeError, OverflowError):
-            _LOGGER.warning("Ungültiger numerischer Wert: %s", value)
+        if not math.isfinite(parsed):
+            _LOGGER.warning("Non-finite numeric value: %s", value)
             return 0.0
+        return parsed
 
     @staticmethod
     def sanitize_integer(
@@ -162,16 +172,16 @@ class InputSanitizer:
         max_value: int | None = None,
         default: int = 0,
     ) -> int:
-        """Sanitize einen Integer-Wert.
+        """Sanitize an integer value.
 
         Args:
-            value: Zu sanitisierender Wert
-            min_value: Minimaler erlaubter Wert
-            max_value: Maximaler erlaubter Wert
-            default: Default-Wert bei Fehler
+            value: The value to convert.
+            min_value: Lowest allowed value.
+            max_value: Highest allowed value.
+            default: Value returned when conversion fails.
 
         Returns:
-            Sanitisierter Integer
+            The sanitized integer.
 
         """
         try:
@@ -183,7 +193,7 @@ class InputSanitizer:
             # Range-Validierung
             if min_value is not None and int_value < min_value:
                 _LOGGER.warning(
-                    "Integer-Wert %d < min %d, verwende min",
+                    "Integer value %d below min %d, clamping",
                     int_value,
                     min_value,
                 )
@@ -191,7 +201,7 @@ class InputSanitizer:
 
             if max_value is not None and int_value > max_value:
                 _LOGGER.warning(
-                    "Integer-Wert %d > max %d, verwende max",
+                    "Integer value %d above max %d, clamping",
                     int_value,
                     max_value,
                 )
@@ -199,7 +209,7 @@ class InputSanitizer:
 
         except (ValueError, TypeError, OverflowError) as err:
             _LOGGER.warning(
-                "Ungültiger Integer-Wert '%s', verwende default %d: %s",
+                "Invalid integer value '%s', using default %d: %s",
                 value,
                 default,
                 err,
@@ -216,14 +226,14 @@ class InputSanitizer:
         precision: int = 2,
         default: float = 0.0,
     ) -> float:
-        """Sanitize einen Float-Wert.
+        """Sanitize a float value.
 
         Args:
-            value: Zu sanitisierender Wert
-            min_value: Minimaler erlaubter Wert
-            max_value: Maximaler erlaubter Wert
-            precision: Dezimalstellen-Präzision
-            default: Default-Wert bei Fehler
+            value: The value to convert.
+            min_value: Lowest allowed value.
+            max_value: Highest allowed value.
+            precision: Number of decimal places.
+            default: Value returned when conversion fails.
 
         Returns:
             Sanitisierter Float
@@ -242,7 +252,7 @@ class InputSanitizer:
             # Range-Validierung
             if min_value is not None and float_value < min_value:
                 _LOGGER.warning(
-                    "Float-Wert %.2f < min %.2f, verwende min",
+                    "Float value %.2f below min %.2f, clamping",
                     float_value,
                     min_value,
                 )
@@ -250,18 +260,18 @@ class InputSanitizer:
 
             if max_value is not None and float_value > max_value:
                 _LOGGER.warning(
-                    "Float-Wert %.2f > max %.2f, verwende max",
+                    "Float value %.2f above max %.2f, clamping",
                     float_value,
                     max_value,
                 )
                 return max_value
 
-            # Präzision
+            # Precision
             return round(float_value, precision)
 
         except (ValueError, TypeError) as err:
             _LOGGER.warning(
-                "Ungültiger Float-Wert '%s', verwende default %.2f: %s",
+                "Invalid float value '%s', using default %.2f: %s",
                 value,
                 default,
                 err,
@@ -270,11 +280,11 @@ class InputSanitizer:
 
     @staticmethod
     def sanitize_boolean(value: Any, *, default: bool = False) -> bool:  # noqa: ANN401
-        """Sanitize einen Boolean-Wert.
+        """Sanitize a boolean value.
 
         Args:
-            value: Zu sanitisierender Wert
-            default: Default-Wert bei Fehler
+            value: The value to convert.
+            default: Value returned when conversion fails.
 
         Returns:
             Sanitisierter Boolean
@@ -294,7 +304,7 @@ class InputSanitizer:
             return bool(value)
 
         _LOGGER.warning(
-            "Ungültiger Boolean-Wert '%s', verwende default %s",
+            "Invalid boolean value '%s', using default %s",
             value,
             default,
         )
@@ -302,78 +312,75 @@ class InputSanitizer:
 
     @staticmethod
     def validate_device_key(key: str) -> str:
-        """Validiere einen Device-Key (z.B. PUMP, HEATER, etc.).
+        """Validate a device key (PUMP, HEATER, pH_value, ...).
+
+        The key is returned unchanged.  Controller keys are case-sensitive -
+        ``pH_value`` and ``onewire1_value`` are real keys - so an invalid key
+        is rejected rather than rewritten into a different, valid-looking one.
 
         Args:
-            key: Device-Key
+            key: The device key to validate.
 
         Returns:
-            Validierter Key
+            The key, unchanged.
 
         Raises:
-            ValueError: Bei ungültigem Key
+            ValueError: If the key is empty, too long, or contains characters
+                outside ``[A-Za-z0-9_]``.
 
         """
         if not key:
             msg = "Device key must not be empty"
             raise ValueError(msg)
 
-        # Nur Großbuchstaben, Zahlen und Underscore erlaubt
-        # Wir erlauben auch Bindestriche und konvertieren sie zu Underscores
-        key = key.upper().replace("-", "_")
-        sanitized = re.sub(r"[^A-Z0-9_]", "", key)
-
-        if sanitized != key:
-            _LOGGER.warning(
-                "Device-Key enthielt ungültige Zeichen: '%s' → '%s'",
-                key,
-                sanitized,
-            )
-
-        if len(sanitized) > _MAX_DEVICE_KEY_LENGTH:
-            msg = f"Device-Key zu lang: {len(sanitized)} > {_MAX_DEVICE_KEY_LENGTH}"
+        if len(key) > _MAX_DEVICE_KEY_LENGTH:
+            msg = f"Device key too long: {len(key)} > {_MAX_DEVICE_KEY_LENGTH}"
             raise ValueError(msg)
 
-        return sanitized
+        if not re.fullmatch(r"[A-Za-z0-9_]+", key):
+            msg = f"Device key contains invalid characters: {key!r}"
+            raise ValueError(msg)
+
+        return key
 
     @staticmethod
     def validate_api_parameter(param: str) -> str:
-        """Validiere einen API-Parameter-Namen.
+        """Validate an API parameter name.
+
+        The parameter is returned unchanged.  Stripping "dangerous" characters
+        used to turn ``DOSAGE_ph.minus`` into ``DOSAGE_phminus``, which is a
+        real, different controller setting - a typo would silently write to
+        the wrong key.  An invalid name is now an error.
 
         Args:
-            param: Parameter-Name
+            param: The parameter name to validate.
 
         Returns:
-            Validierter Parameter
+            The parameter name, unchanged.
 
         Raises:
-            ValueError: Bei ungültigem Parameter oder Path Traversal
+            ValueError: If the parameter is empty, too long, contains a path
+                traversal sequence, or characters outside ``[A-Za-z0-9_-]``.
 
         """
         if not param:
             msg = "API parameter must not be empty"
             raise ValueError(msg)
 
-        # Prüfe auf Path Traversal VOR der Bereinigung
+        # Check for path traversal before anything else.
         if InputSanitizer.PATH_TRAVERSAL.search(param):
-            msg = f"Path Traversal erkannt in Parameter: {param}"
+            msg = f"Path traversal detected in parameter: {param}"
             raise ValueError(msg)
 
-        # Entferne gefährliche Zeichen
-        sanitized = re.sub(r"[^a-zA-Z0-9_-]", "", param)
-
-        if sanitized != param:
-            _LOGGER.warning(
-                "API-Parameter enthielt ungültige Zeichen: '%s' → '%s'",
-                param,
-                sanitized,
-            )
-
-        if len(sanitized) > _MAX_API_PARAM_LENGTH:
-            msg = f"API-Parameter zu lang: {len(sanitized)} > {_MAX_API_PARAM_LENGTH}"
+        if len(param) > _MAX_API_PARAM_LENGTH:
+            msg = f"API parameter too long: {len(param)} > {_MAX_API_PARAM_LENGTH}"
             raise ValueError(msg)
 
-        return sanitized
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", param):
+            msg = f"API parameter contains invalid characters: {param!r}"
+            raise ValueError(msg)
+
+        return param
 
     @staticmethod
     def validate_temperature(
@@ -381,10 +388,10 @@ class InputSanitizer:
         min_temp: float = -50.0,
         max_temp: float = 100.0,
     ) -> float:
-        """Validiere einen Temperatur-Wert.
+        """Validate a temperature value.
 
         Args:
-            temp: Temperatur-Wert
+            temp: The temperature value.
             min_temp: Minimale Temperatur
             max_temp: Maximale Temperatur
 
@@ -402,14 +409,14 @@ class InputSanitizer:
 
     @staticmethod
     def validate_ph_value(ph: Any) -> float:  # noqa: ANN401
-        """Validiere einen pH-Wert.
+        """Validate a pH value.
 
         Args:
-            ph: pH-Wert
+            ph: The pH value.
 
         Returns:
-            Validierter pH-Wert (6.0-8.0), passend zum vom Controller
-            akzeptierten Sollwertbereich (siehe ``SETPOINT_RANGES``).
+            The validated pH value (6.0-8.0), matching the range the
+            controller accepts as a setpoint (see ``SETPOINT_RANGES``).
 
         """
         return InputSanitizer.sanitize_float(
@@ -422,13 +429,13 @@ class InputSanitizer:
 
     @staticmethod
     def validate_orp_value(orp: Any) -> int:  # noqa: ANN401
-        """Validiere einen ORP-Wert (Redoxpotential).
+        """Validate an ORP (redox potential) value.
 
         Args:
-            orp: ORP-Wert in mV
+            orp: The ORP value in mV.
 
         Returns:
-            Validierter ORP-Wert (500-900 mV)
+            The validated ORP value (500-900 mV).
 
         """
         return InputSanitizer.sanitize_integer(
@@ -440,13 +447,13 @@ class InputSanitizer:
 
     @staticmethod
     def validate_chlorine_level(chlorine: Any) -> float:  # noqa: ANN401
-        """Validiere einen Chlor-Wert.
+        """Validate a chlorine value.
 
         Args:
-            chlorine: Chlor-Wert in mg/l
+            chlorine: The chlorine value in mg/l.
 
         Returns:
-            Validierter Chlor-Wert (0.0-5.0 mg/l)
+            The validated chlorine value (0.0-5.0 mg/l).
 
         """
         return InputSanitizer.sanitize_float(

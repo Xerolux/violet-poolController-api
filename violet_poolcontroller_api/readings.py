@@ -85,32 +85,52 @@ def _parse_output_state(raw: Any) -> OutputState | None:  # noqa: ANN401
     * Composite strings with pipe separator: ``"3|PUMP_ANTI_FREEZE"`` →
       ``OutputState.AUTO_PRIO_ON`` (numeric prefix is used)
     """
+    numeric = _opt_int(raw)
+    if numeric is None:
+        return None
+    try:
+        return OutputState(numeric)
+    except ValueError:
+        return None
+
+
+def _opt_int(raw: Any) -> int | None:  # noqa: ANN401
+    """Return the leading integer of a raw controller value, or ``None``.
+
+    The controller answers with more shapes than a bare number: composite
+    states carry a suffix (``"3|PUMP_ANTI_FREEZE"``), some keys are typed
+    "LIST, STRING" in the firmware spec and arrive as ``[]``, and decimal
+    strings such as ``"1.0"`` occur alongside plain ``"1"``.  Every one of
+    those has to come back as ``None`` or an ``int`` - never as an exception,
+    because these parsers sit behind attribute access on a readings snapshot.
+    """
     if raw is None:
         return None
     try:
-        numeric = str(raw).split("|")[0].strip()
-        return OutputState(int(numeric))
-    except (ValueError, KeyError):
+        return int(float(str(raw).split("|")[0].strip()))
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
 def _parse_dmx_state(raw: Any) -> DmxSceneState | None:  # noqa: ANN401
     """Convert a raw DMX scene state to :class:`DmxSceneState`."""
-    if raw is None:
+    numeric = _opt_int(raw)
+    if numeric is None:
         return None
     try:
-        return DmxSceneState(int(raw))
-    except (ValueError, KeyError):
+        return DmxSceneState(numeric)
+    except ValueError:
         return None
 
 
 def _parse_rule_state(raw: Any) -> RuleState | None:  # noqa: ANN401
     """Convert a raw digital rule state to :class:`RuleState`."""
-    if raw is None:
+    numeric = _opt_int(raw)
+    if numeric is None:
         return None
     try:
-        return RuleState(int(raw))
-    except (ValueError, KeyError):
+        return RuleState(numeric)
+    except ValueError:
         return None
 
 
@@ -136,11 +156,12 @@ def _parse_onewire_state(raw: Any) -> OnewireState | None:  # noqa: ANN401
 
 def _parse_pv_surplus(raw: Any) -> PvSurplusState | None:  # noqa: ANN401
     """Convert a PVSURPLUS value to :class:`PvSurplusState`."""
-    if raw is None:
+    numeric = _opt_int(raw)
+    if numeric is None:
         return None
     try:
-        return PvSurplusState(int(raw))
-    except (ValueError, KeyError):
+        return PvSurplusState(numeric)
+    except ValueError:
         return None
 
 
@@ -177,6 +198,9 @@ class VioletReadings(Mapping[str, Any]):
                 invalidating the :func:`cached_property` values.
         """
         self._raw: dict[str, Any] = dict(raw)
+        # Built once: ``raw`` is read per entity per state write, and a fresh
+        # proxy object for each of those is pure allocation.
+        self._raw_proxy: MappingProxyType[str, Any] = MappingProxyType(self._raw)
 
     # ------------------------------------------------------------------
     # Mapping protocol (required)
@@ -202,7 +226,7 @@ class VioletReadings(Mapping[str, Any]):
         Use this to access keys that are not yet exposed as typed properties
         (e.g. undocumented or firmware-specific fields).
         """
-        return MappingProxyType(self._raw)
+        return self._raw_proxy
 
     # ------------------------------------------------------------------
     # System information

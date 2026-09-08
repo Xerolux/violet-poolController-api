@@ -817,33 +817,6 @@ async def handle_get_live_trace(request: web.Request) -> web.Response:
     return web.Response(text=body, content_type="text/plain")
 
 
-async def handle_set_target_values(request: web.Request) -> web.Response:
-    """GET /setTargetValues?target=KEY&value=VAL — set a target value."""
-    _log_request(request)
-    await _maybe_delay()
-    if (err := _check_error_mode()) is not None:
-        return err
-    target = request.query.get("target", "")
-    value = request.query.get("value", "")
-    if target:
-        _ctrl.config[target] = value
-        _LOGGER.info("  -> setTargetValues: %s = %s", target, value)
-    return web.json_response({"ok": True})
-
-
-async def handle_set_dosing_parameters(request: web.Request) -> web.Response:
-    """POST /setDosingParameters — merge JSON into dosing parameters."""
-    _log_request(request)
-    await _maybe_delay()
-    if (err := _check_error_mode()) is not None:
-        return err
-    data = await request.post()
-    for key, value in data.items():
-        _ctrl.config[str(key)] = value
-        _LOGGER.debug("  -> dosing param: %s = %s", key, value)
-    return web.json_response({"ok": True})
-
-
 # ---------------------------------------------------------------------------
 # Mock control endpoints (NOT part of the real controller API)
 # ---------------------------------------------------------------------------
@@ -961,8 +934,6 @@ def create_app() -> web.Application:
     app.router.add_get("/getConfig", handle_get_config)
     app.router.add_post("/setConfig", handle_set_config)
     app.router.add_get("/setFunctionManually", handle_set_function_manually)
-    app.router.add_get("/setTargetValues", handle_set_target_values)
-    app.router.add_post("/setDosingParameters", handle_set_dosing_parameters)
     app.router.add_post("/triggerManualDosing", handle_trigger_manual_dosing)
     app.router.add_get("/getHistory", handle_get_history)
     app.router.add_get("/getWeatherdata", handle_get_weatherdata)

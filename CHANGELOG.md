@@ -2,7 +2,142 @@
 
 All notable changes to this project will be documented in this file.
 
-## v0.0.38
+## v0.0.39 (2026-09-08)
+
+Findings of a full read-only audit of 0.0.38, fixed. The first two are the
+reason this release exists: both could act on the pool without anyone asking.
+
+### Safety
+
+- **fix: a command that timed out could be sent twice.** Retryability was
+  decided by HTTP method, but the controller applies almost every state change
+  through `GET`. A `setFunctionManually` request that timed out *after* the
+  controller applied it was repeated up to `max_retries` times. For the `PUSH`
+  actions - the digital-rule trigger and the cover commands - that undid the
+  change or moved the cover a second time; `initUpdate` and `setOutputTestmode`
+  are not idempotent either. Command endpoints are now listed in
+  `NON_RETRYABLE_ENDPOINTS` and sent exactly once, whatever their method, and
+  every command method also passes `retryable=False` explicitly. Reads keep
+  their retries.
+- **fix: the rate limiter was bypassed exactly when it was needed.** When the
+  10-second wait for a token expired, the request was logged, delayed by one
+  second and then **sent without a token**. Under sustained load every caller
+  that waited out the timeout hit the controller at once. The request now fails
+  with `VioletPoolAPIError`, and the timeout is the named constant
+  `API_RATE_LIMIT_WAIT_TIMEOUT`.
+
+### Fixes
+
+- **fix: typed readings accessors raised `TypeError` on list values.** The
+  firmware types `DOS_*_STATE` as "LIST, STRING", so `VioletReadings({"DMX_SCENE1": []}).dmx_scenes`
+  crashed the consumer instead of returning `None`. All four state parsers now
+  go through one total helper that also accepts `"1.0"` and composite
+  `"4|SOMETHING"` values.
+- **fix: an HTML login or captive-portal page opened the circuit breaker.** A
+  200 response with HTML is a deterministic answer, not a transient failure;
+  counting it hid the payload error that explains the problem behind "circuit
+  breaker is open". `VioletPayloadError` is now ignored by the breaker.
+- **fix: `set_config()` wrote to keys the caller never named.** Invalid
+  characters were stripped, so `DOSAGE_ph.minus` silently became the real,
+  different setting `DOSAGE_phminus`. `InputSanitizer.validate_api_parameter()`
+  and `validate_device_key()` now validate and return the input unchanged,
+  raising on anything invalid. `validate_device_key()` also stops upper-casing:
+  controller keys are case-sensitive (`pH_value`), so rewriting them was a bug
+  of its own.
+- **fix: `set_config()` sent `"None"` and `"1 2"` to the controller.** `None`,
+  lists and dicts were coerced with `str()`; non-finite floats became `0.0`.
+  All of them now raise instead of writing a wrong value.
+- **fix: `sanitize_numeric("1,5")` returned `15.0`.** A single comma is read as
+  a decimal separator before the digit-extraction fallback runs. Values with a
+  unit (`"12.5 mL"`) still yield their number.
+- **fix: `set_target_value()` posted the unvalidated original value**, so
+  `" 28.5 "` reached the controller as a string. The validated number is sent.
+- **fix: `get_log()` returned `[]` instead of `False` for `has_more`** on an
+  empty body, and left a trailing `\r` on every line of a CRLF response.
+- **fix: `manual_dosing()` raised a bare `TypeError`** for a non-numeric
+  duration, because the comparison ran before validation.
+- **fix: `validate_duration(True)` was accepted as a one-second run.** `bool`
+  is rejected explicitly.
+- **fix: `parse_uptime_string()` returned zero** if the firmware ever appended
+  seconds; it now shares the runtime parser. `parse_epoch_seconds()` treats
+  negative values as unset rather than converting them to dates in 1969.
+- **fix: `_command_result()` returned a `dict` body unchanged**, without the
+  `success` key every caller reads.
+
+### Security / Hardening
+
+- **fix: credentials in a host string reached the exception message.**
+  `host="http://admin:s3cret@192.168.1.5"` produced
+  `Invalid hostname format: admin:s3cret@192.168.1.5`, which lands in Home
+  Assistant config-flow errors and log files. The message no longer echoes the
+  input.
+- **fix: the body of a 4xx response was copied into the exception unbounded.**
+  A 5 KB HTML error page produced a 5 KB log line; it is collapsed and cut at
+  200 characters.
+- **fix: disabling certificate verification performed a blocking disk read.**
+  `ssl.create_default_context()` loaded the system CA store only to set
+  `CERT_NONE`; aiohttp is handed `ssl=False` instead. This ran inside the Home
+  Assistant event loop.
+
+### Behaviour
+
+- Hostnames may contain underscores (`violet_pool.local`); mDNS and
+  router-assigned names use them and were rejected outright.
+- Request priorities now match what `const_api.py` documents: state changes and
+  `setOutputTestmode` are `CRITICAL`, `set_config()` is `HIGH`, and
+  `getHistory`, `getLog` and `getUpdateHistory` are `LOW`. A pump-off command
+  no longer queues behind sensor polling.
+- A separate connect timeout (5 s, capped by the total) keeps a controller that
+  accepts the connection but never answers from consuming the whole budget.
+- `_trigger_dosing()` accepts a `source` argument for the firmware's `from`
+  form field, which selects the chemical on channels shared by more than one
+  agent. H2O2 manual dosing stays unsupported until the mapping is confirmed
+  against firmware.
+
+### API surface
+
+- Symbols earlier changelogs promised as public are now actually exported:
+  `validate_duration`, `RS485_PUMP_NAMES`, `RS485_PUMP_MODES`,
+  `DEVICE_STATE_MAPPING`, `SWITCH_FUNCTIONS`, `DOSING_FUNCTIONS`,
+  `DOSING_OUTPUT_INDEX`, `DOSING_CONFIG_PREFIX`, `DOSING_CANISTER_ID`,
+  `OMNI_POSITIONS`, `SYSTEM_SERVICES`, `LOG_TYPES`, `SPECIFIC_READING_GROUPS`,
+  `NON_RETRYABLE_ENDPOINTS`, `TARGET_PH`, `TARGET_ORP`, `TARGET_MIN_CHLORINE`,
+  `API_PRIORITY_*`, `CircuitBreakerState`, `get_device_state_info` and
+  `get_device_mode_from_state`.
+- `SWITCH_FUNCTIONS` labels are English: "Extension 1.1", "DMX scene 1",
+  "Switching rule 1". Consumers that displayed them see a changed string.
+- The `aiohttp` upper bound (`<3.15`) is removed. Home Assistant follows
+  aiohttp closely, and the cap would have made `pip` refuse this package inside
+  Home Assistant the day core moved past it.
+
+### Internals
+
+- The rate limiter's `request_history`, `_last_known_tokens` and
+  `history_cleanup_interval` were written and never read; they are gone.
+  `get_stats()["current_tokens"]` is computed for now instead of reporting a
+  stale value that looked like an exhausted limiter after an idle period.
+- The circuit breaker logged the failure *threshold* where it meant the failure
+  *count*, and `get_stats()` carried an unreachable "lock held" branch.
+- `VioletReadings.raw` builds its proxy once instead of per access.
+
+### Documentation
+
+- The German docstrings and log messages in `utils_sanitizer.py` and
+  `utils_rate_limiter.py` that 0.0.38 claimed to have translated are translated
+  now, and the language-policy word list is extended so it would have caught
+  them. `parse_error_notification()` no longer emits
+  `"Unbekannter Fehlercode"`.
+- `SECURITY.md` no longer lists only `>= 1.0` as supported, which excluded
+  every published version. Undated changelog sections have dates.
+
+### Tests
+
+- Eight regression tests: switch commands, rule triggers and `initUpdate` are
+  sent once while reads still retry; a limiter timeout sends nothing; an HTML
+  page does not open the breaker; the hostname error hides credentials;
+  underscores are accepted. 250 -> 260 tests.
+
+## v0.0.38 (2026-09-06)
 
 ### Fixes
 - **fix: two exception messages reached callers in German** — `sanitize_device_key()` raised `"Device-Key darf nicht leer sein"` and `sanitize_api_parameter()` raised `"API-Parameter darf nicht leer sein"`. A consumer passing an empty key got a German error out of a package published on PyPI. Both are now English (`"Device key must not be empty"`, `"API parameter must not be empty"`). Anything matching on the message text — nothing in this repository did — needs updating.
@@ -26,7 +161,7 @@ not skip a published version. See
 - rate limiter bypassed on retries
 - decimal parsing
 
-## v0.0.36
+## v0.0.36 (2026-08-02)
 
 ### Security / Hardening
 - **fix: user input in `get_calibration_history()` was not URL-encoded** — the `sensor` argument was concatenated raw into the request URL. A value containing spaces, `#`, `&`, or other reserved characters produced a malformed URL or injected an extra query parameter (`sensor="pH&x=1"` → `?pH&x=1`). The value is now percent-encoded with `urllib.parse.quote(safe="")`, consistent with the encoding already applied in `set_switch_state()`.
@@ -50,7 +185,7 @@ pip install violet-poolController-api==0.0.36
 
 ---
 
-## v0.0.35
+## v0.0.35 (2026-07-26)
 
 ### Fixes
 - **fix: `get_output_runtimes()` returned empty dict** — the method called `_request()` without `expect_json=True`, so the controller's JSON body was returned as a raw `str`. The `isinstance(resp, dict)` check therefore always failed, logging `Unexpected non-dict response for get_output_runtimes: str` and discarding all runtime/timestamp data (PUMP, SOLAR, HEATER, CPU_UPTIME, etc.). Switched to `_request_json_dict()` (same path used by `get_readings()`), which parses the JSON and enforces a dict response. Non-JSON or non-dict responses now raise `VioletPoolAPIError` instead of being silently swallowed.
