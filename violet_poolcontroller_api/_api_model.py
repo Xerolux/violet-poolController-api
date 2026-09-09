@@ -70,6 +70,10 @@ def validate_duration(
     maximum: int = 86400,
 ) -> int:
     """Validate an actuator duration without silently coercing invalid values."""
+    # bool is an int subclass, so True would otherwise pass as a 1-second run.
+    if isinstance(value, bool):
+        msg = f"Duration must be a whole number between {minimum} and {maximum} seconds"
+        raise VioletPoolAPIError(msg)
     try:
         numeric = float(value)
     except (TypeError, ValueError, OverflowError) as err:

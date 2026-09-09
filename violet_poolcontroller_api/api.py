@@ -26,7 +26,6 @@ import logging
 import math
 import random
 import re
-import ssl
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote, urlparse, urlunparse
 
@@ -53,13 +52,16 @@ from .const_api import (
     API_GET_CALIB_HISTORY,
     API_GET_CALIB_RAW_VALUES,
     API_GET_CONFIG,
+    API_PRIORITY_HIGH,
     API_PRIORITY_NORMAL,
     API_RATE_LIMIT_BURST,
     API_RATE_LIMIT_REQUESTS,
     API_RATE_LIMIT_RETRY_AFTER,
+    API_RATE_LIMIT_WAIT_TIMEOUT,
     API_RATE_LIMIT_WINDOW,
     API_RESTORE_CALIBRATION,
     API_SET_CONFIG,
+    NON_RETRYABLE_ENDPOINTS,
 )
 from .const_devices import DEVICE_PARAMETERS
 from .utils_rate_limiter import RateLimiter
@@ -77,6 +79,11 @@ _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_UNAUTHORIZED = 401
 _HTTP_FORBIDDEN = 403
 _MIN_CALIB_HISTORY_PARTS = 3
+# Connect budget inside the total request timeout.
+_CONNECT_TIMEOUT = 5.0
+# Upper bound for controller-supplied error text copied into exceptions; the
+# full body of an HTML error page has no place in a Home Assistant log line.
+_MAX_ERROR_BODY_CHARS = 200
 
 class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
     """A small HTTP client for interacting with the Violet Pool Controller.
@@ -124,7 +131,14 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
 
         self._session = session
         total_timeout = max(float(timeout), 1.0)
-        self._timeout = aiohttp.ClientTimeout(total=total_timeout)
+        # A separate connect budget keeps a controller that accepts the TCP
+        # connection but never answers from burning the whole total on the
+        # handshake alone.
+        self._timeout = aiohttp.ClientTimeout(
+            total=total_timeout,
+            connect=min(total_timeout, _CONNECT_TIMEOUT),
+            sock_read=total_timeout,
+        )
         self._max_retries = max(1, int(max_retries))
         self._dosing_standalone = bool(dosing_standalone)
         self._headers: dict[str, str] = {}
@@ -136,19 +150,18 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
             token = base64.b64encode(credentials).decode("ascii")
             self._headers["Authorization"] = f"Basic {token}"
 
-        # SSL/TLS security configuration
+        # SSL/TLS security configuration.  Verification is switched off by
+        # handing aiohttp ``ssl=False`` rather than by building a permissive
+        # SSLContext: creating one reads the system CA store from disk, which
+        # is a blocking call, and those CAs are never consulted afterwards.
         self._verify_ssl = verify_ssl
         self._use_ssl = use_ssl
-        self._ssl_context: ssl.SSLContext | None = None
         if use_ssl and not verify_ssl:
             _LOGGER.warning(
                 "SSL certificate verification is DISABLED. "
                 "This is a security risk and should only be used for testing "
                 "or with self-signed certificates in trusted networks.",
             )
-            self._ssl_context = ssl.create_default_context()
-            self._ssl_context.check_hostname = False
-            self._ssl_context.verify_mode = ssl.CERT_NONE
 
         # Rate limiting to protect the controller from being overloaded
         self._rate_limiter = rate_limiter or RateLimiter(
@@ -159,7 +172,11 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
         )
         self._circuit_breaker = CircuitBreaker(
             expected_exception=VioletPoolAPIError,
-            ignored_exceptions=(DeterministicClientError,),
+            # A payload error is a deterministic answer, not a transient
+            # failure: a captive portal or a firmware login page answers 200
+            # with HTML every time.  Counting those would open the breaker and
+            # replace the message that explains the problem.
+            ignored_exceptions=(DeterministicClientError, VioletPayloadError),
         )
         _LOGGER.debug(
             "API initialized with rate limiting enabled, SSL=%s, verify_ssl=%s",
@@ -197,16 +214,15 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
         return self._dosing_standalone
 
     @property
-    def _ssl_param(self) -> ssl.SSLContext | bool:
+    def _ssl_param(self) -> bool:
         """Return the SSL parameter for aiohttp requests.
 
-        For plain-HTTP connections the value is ignored by aiohttp, so the
-        library default (True) is returned.
+        ``False`` disables certificate verification; for plain-HTTP
+        connections the value is ignored by aiohttp, so the library default
+        (``True``) is returned.
         """
-        if not self._use_ssl:
-            return True
-        if self._ssl_context is not None:
-            return self._ssl_context
+        if self._use_ssl and not self._verify_ssl:
+            return False
         return True
 
     # ---------------------------------------------------------------------
@@ -236,7 +252,12 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
             raise ValueError(msg) from err
 
         if parsed_host.username or parsed_host.password:
-            msg = f"Invalid hostname format: {host}"
+            # Never echo the input here: it carries the credentials, and this
+            # message reaches config-flow errors and log files.
+            msg = (
+                "Hostname must not contain credentials; "
+                "pass username and password separately"
+            )
             raise ValueError(msg)
         if parsed_host.path or parsed_host.query or parsed_host.fragment:
             msg = f"Invalid hostname format: {host}"
@@ -263,12 +284,15 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
         except ValueError:
             is_ip_literal = False
 
-        if not is_ip_literal and not re.match(r"^[a-zA-Z0-9.-]+$", hostname):
+        # Underscores are accepted: mDNS and many router-assigned names use
+        # them (``violet_pool.local``), and rejecting them locked those
+        # controllers out entirely.
+        if not is_ip_literal and not re.match(r"^[a-zA-Z0-9._-]+$", hostname):
             msg = f"Invalid hostname format: {host}"
             raise ValueError(msg)
 
         # Additional validation
-        if len(hostname) > _MAX_HOSTNAME_LENGTH or ".." in hostname or "//" in host:
+        if len(hostname) > _MAX_HOSTNAME_LENGTH or ".." in hostname:
             msg = f"Invalid hostname: {host}"
             raise ValueError(msg)
 
@@ -278,6 +302,18 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
 
         protocol = "https" if use_ssl else "http"
         return urlunparse((protocol, netloc, "", "", "", ""))
+
+    @staticmethod
+    def _is_non_retryable_endpoint(endpoint: str) -> bool:
+        """Return whether *endpoint* addresses a command that must be sent once.
+
+        ``endpoint`` may carry a query string (``/setRS485Live?DONE``) or a
+        leading slash may be missing, so only the path is compared.
+        """
+        path = endpoint.split("?", 1)[0].strip()
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return path in NON_RETRYABLE_ENDPOINTS
 
     def _build_url(self, endpoint: str) -> str:
         """Construct the full URL for a given endpoint.
@@ -337,21 +373,34 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
                 url = f"{url}?{query}"
 
             method_upper = method.upper()
-            should_retry = retryable if retryable is not None else method_upper in {"GET", "HEAD"}
+            should_retry = (
+                retryable
+                if retryable is not None
+                else (
+                    method_upper in {"GET", "HEAD"}
+                    and not self._is_non_retryable_endpoint(endpoint)
+                )
+            )
             attempt_limit = self._max_retries if should_retry else 1
 
             for attempt in range(1, attempt_limit + 1):
                 # Wait if the rate limit is reached; re-acquired on every
                 # attempt so retries cannot bypass the per-request cap.
                 try:
-                    await self._rate_limiter.wait_if_needed(priority=priority, timeout=10.0)
-                except TimeoutError:
-                    _LOGGER.warning(
-                        "Rate limiter timeout for %s (priority: %d) - applying fallback delay",
-                        endpoint,
-                        priority,
+                    await self._rate_limiter.wait_if_needed(
+                        priority=priority,
+                        timeout=API_RATE_LIMIT_WAIT_TIMEOUT,
                     )
-                    await asyncio.sleep(1.0)
+                except TimeoutError as err:
+                    # Sending the request anyway would let every caller that
+                    # waited out the timeout hit the controller at once, which
+                    # is the pile-up the limiter exists to prevent.  Fail the
+                    # request instead and let the caller back off.
+                    msg = (
+                        f"Rate limit wait for {endpoint} exceeded "
+                        f"{API_RATE_LIMIT_WAIT_TIMEOUT}s"
+                    )
+                    raise VioletPoolAPIError(msg) from err
 
                 try:
                     async with self._session.request(
@@ -380,7 +429,8 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
                             and response.status < _HTTP_SERVER_ERROR
                         ):
                             body = await response.text()
-                            msg = f"HTTP {response.status} for {endpoint}: {body.strip()}"
+                            detail = " ".join(body.split())[:_MAX_ERROR_BODY_CHARS]
+                            msg = f"HTTP {response.status} for {endpoint}: {detail}"
                             is_auth = response.status in (
                                 _HTTP_UNAUTHORIZED,
                                 _HTTP_FORBIDDEN,
@@ -470,7 +520,9 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
         For dosing: MANDOS_STARTED\\nOK or MANDOS_STOPPED\\nOK
 
         Args:
-            body: The raw response body or dict.
+            body: The raw response body.  A ``dict`` is accepted for callers
+                that already decoded JSON and is normalised the same way, so
+                the ``success`` key is always present.
 
         Returns:
             A dictionary with success status, response text, and optional
@@ -478,7 +530,7 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
 
         """
         if isinstance(body, dict):
-            return body
+            return {"success": True, "response": json.dumps(body), **body}
 
         text = (body or "").strip()
         lines = text.splitlines() if text else []
@@ -562,6 +614,7 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
         params: Mapping[str, Any] | None = None,
         query: str | None = None,
         payload_name: str,
+        priority: int = API_PRIORITY_NORMAL,
     ) -> dict[str, Any]:
         """Request JSON content and enforce a dictionary response shape."""
         response = await self._request(
@@ -569,6 +622,7 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
             params=params,
             query=query,
             expect_json=True,
+            priority=priority,
         )
         if not isinstance(response, dict):
             msg = f"Unexpected payload returned from {payload_name}"
@@ -598,9 +652,19 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
                 elif isinstance(value, int):
                     sanitized_value = value
                 elif isinstance(value, float):
-                    sanitized_value = InputSanitizer.sanitize_numeric(value)
+                    if not math.isfinite(value):
+                        msg = f"Non-finite value for configuration key {key}"
+                        raise VioletPoolAPIError(msg)
+                    sanitized_value = value
                 else:
-                    sanitized_value = InputSanitizer.sanitize_string(str(value))
+                    # ``str(value)`` used to turn None into "None" and a list
+                    # into "1 2", writing nonsense into a controller setting.
+                    # Refuse instead: a wrong value is worse than an error.
+                    msg = (
+                        f"Unsupported value type for configuration key {key}: "
+                        f"{type(value).__name__}"
+                    )
+                    raise VioletPoolAPIError(msg)
 
                 sanitized_config[sanitized_key] = sanitized_value
             except ValueError as err:
@@ -694,6 +758,8 @@ class VioletPoolAPI(ReadingsMixin, DosingMixin, OutputsMixin, SystemMixin):
             API_SET_CONFIG,
             method="POST",
             data=sanitized_config,
+            priority=API_PRIORITY_HIGH,
+            retryable=False,
         )
         return self._command_result(body)
 

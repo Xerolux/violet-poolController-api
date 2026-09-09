@@ -8,27 +8,47 @@ This file provides context and guidelines for AI assistants working on this proj
 
 - **Language:** Python 3.12+
 - **Framework:** `aiohttp` (async HTTP client)
-- **Package:** `violet-poolcontroller-api` on PyPI
+- **Package:** `violet-poolController-api` on PyPI (imported as `violet_poolcontroller_api`)
 - **License:** AGPL-3.0-or-later
 
 ## Repository Structure
 
 ```
 violet_poolcontroller_api/     # Main package
-  api.py                       # VioletPoolAPI client class - all public methods
+  api.py                       # VioletPoolAPI: request pipeline, config, calibration
+  _api_mixin.py                # Shared protocol the mixins below are typed against
+  _api_model.py                # Exception hierarchy, setpoint and duration validation
+  _api_readings.py             # getReadings, history, output states and runtimes
+  _api_dosing.py               # Manual dosing, setpoints, canister amounts
+  _api_outputs.py              # Switch/cover/DMX/OmniTronic/RS485 commands
+  _api_system.py               # Logs, notifications, services, firmware update
+  readings.py                  # VioletReadings: typed view over one snapshot
+  parsers.py                   # Runtime, uptime and epoch parsing helpers
   const_api.py                 # API endpoints, actions, error codes, constants
   const_devices.py             # Device parameters, state mappings, VioletState class
   circuit_breaker.py           # Circuit breaker pattern for resilience
   utils_rate_limiter.py        # Token bucket rate limiter
   utils_sanitizer.py           # Input sanitization (XSS, path traversal, etc.)
+  py.typed                     # Marks the package as typed (PEP 561)
   __init__.py                  # Public exports
 
 tests/
+  conftest.py                  # Fixtures and the aioresponses/aiohttp shim
   test_api.py                  # Unit tests (uses aioresponses for HTTP mocking)
+  test_readings.py             # VioletReadings accessors
+  test_parsers.py              # Runtime/uptime/epoch parsing
+  test_sanitizer.py            # Input sanitization
+  test_rate_limiter.py         # Token bucket behaviour
+  test_circuit_breaker.py      # Breaker state machine
+  test_language_policy.py      # Everything written here is English
   mock_server.py               # Full mock server simulating the controller
   test_api_smoke.py            # End-to-end smoke test against mock server
   test_mock_server.py          # Integration test (auth, full workflow)
 ```
+
+The public methods live in the `_api_*.py` mixins, which `VioletPoolAPI`
+composes; `api.py` itself holds the request pipeline (rate limiting, retries,
+circuit breaker, sanitization) plus the config and calibration calls.
 
 ## Commands
 
@@ -36,8 +56,8 @@ tests/
 # Lint
 python -m ruff check .
 
-# Run unit tests
-pytest tests/test_api.py
+# Run the test suite (what CI runs)
+pytest -q tests
 
 # Run mock server (for manual testing)
 python tests/mock_server.py --user admin --password secret --port 8480
@@ -121,7 +141,7 @@ untranslated is a separate matter - there, fidelity to the device wins.
 ## When Making Changes
 
 1. Run `python -m ruff check .` after edits
-2. Run `pytest tests/test_api.py` to verify unit tests pass
+2. Run `pytest -q tests` to verify the suite passes
 3. If adding new API methods: add corresponding mock server handler AND smoke test
 4. If modifying endpoints: update both `const_api.py` constants and mock server
 5. Never commit secrets, passwords, or real IP addresses

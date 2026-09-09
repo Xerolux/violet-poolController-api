@@ -51,13 +51,6 @@ _RE_RUNTIME = re.compile(
 # Matches "HH:MM:SS" exactly.
 _RE_HMS = re.compile(r"^(\d+):(\d+):(\d+)$")
 
-# Matches optional days and hours (no seconds) – typical CPU uptime format.
-# Example: "250d 11h 48m"
-_RE_UPTIME = re.compile(
-    r"(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?",
-    re.IGNORECASE,
-)
-
 
 def parse_runtime_string(value: str) -> timedelta:
     """Parse a runtime string like ``"04h 33m 12s"`` into a ``timedelta``.
@@ -99,8 +92,10 @@ def parse_hms_string(value: str) -> timedelta:
 def parse_uptime_string(value: str) -> timedelta:
     """Parse a CPU uptime string like ``"250d 11h 48m"`` into a ``timedelta``.
 
-    Unlike :func:`parse_runtime_string`, seconds are not expected in this
-    format.  An empty or non-matching string returns ``timedelta(0)``.
+    Seconds are not expected in this format but are accepted, so a firmware
+    that starts reporting ``"250d 11h 48m 12s"`` does not silently turn into
+    ``timedelta(0)``.  An empty or non-matching string returns
+    ``timedelta(0)``.
 
     Args:
         value: Raw uptime string from the controller.
@@ -108,11 +103,7 @@ def parse_uptime_string(value: str) -> timedelta:
     Returns:
         ``timedelta`` representing the uptime duration.
     """
-    m = _RE_UPTIME.fullmatch(value.strip())
-    if not m:
-        return timedelta(0)
-    days, hours, minutes = (int(g) if g else 0 for g in m.groups())
-    return timedelta(days=days, hours=hours, minutes=minutes)
+    return parse_runtime_string(value)
 
 
 def parse_epoch_seconds(value: int | float | str) -> datetime | None:
@@ -120,7 +111,9 @@ def parse_epoch_seconds(value: int | float | str) -> datetime | None:
 
     A value of ``0`` (or ``"0"``) is treated as *no timestamp available* and
     returns ``None``, because the controller uses zero as a sentinel for
-    unset timestamps.
+    unset timestamps.  Negative values are rejected the same way: they are
+    not real timestamps from this device, and converting them produced dates
+    in 1969.
 
     Args:
         value: Unix timestamp in seconds (int, float, or numeric string).
@@ -133,7 +126,7 @@ def parse_epoch_seconds(value: int | float | str) -> datetime | None:
         ts = float(value)
     except (ValueError, TypeError):
         return None
-    if not math.isfinite(ts) or ts == 0:
+    if not math.isfinite(ts) or ts <= 0:
         return None
     try:
         return datetime.fromtimestamp(ts, tz=UTC)

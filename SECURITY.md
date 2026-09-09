@@ -4,10 +4,10 @@
 
 Currently, the `main` branch and the latest published PyPI release are actively supported with security updates.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| >= 1.0  | :white_check_mark: |
-| < 1.0   | :x:                |
+| Version                      | Supported          |
+| ---------------------------- | ------------------ |
+| Latest published 0.0.x release | :white_check_mark: |
+| Anything older               | :x:                |
 
 ## Reporting a Vulnerability
 

@@ -68,6 +68,8 @@ class OutputsMixin(APIClientMixin):
         body = await self._request(
             API_SET_OUTPUT_TESTMODE,
             query=query,
+            priority=API_PRIORITY_CRITICAL,
+            retryable=False,
         )
         return self._command_result(body)
 
@@ -119,7 +121,15 @@ class OutputsMixin(APIClientMixin):
             last_value=last_value,
         )
         query = quote(payload, safe=",")
-        body = await self._request(API_SET_FUNCTION_MANUALLY, query=query)
+        body = await self._request(
+            API_SET_FUNCTION_MANUALLY,
+            query=query,
+            # A state change runs ahead of sensor polling, and is sent once:
+            # repeating it after a timeout can undo it (PUSH toggles) or apply
+            # it twice.
+            priority=API_PRIORITY_CRITICAL,
+            retryable=False,
+        )
         return self._command_result(body)
 
     @staticmethod
@@ -404,6 +414,7 @@ class OutputsMixin(APIClientMixin):
             url,
             method="GET",
             priority=API_PRIORITY_CRITICAL,
+            retryable=False,
         )
         return self._command_result(body)
 
@@ -516,6 +527,7 @@ class OutputsMixin(APIClientMixin):
             url,
             method="GET",
             priority=API_PRIORITY_CRITICAL,
+            retryable=False,
         )
         text = str(body) if body is not None else ""
         # Firmware JSON-encodes the response (res.write(JSON.stringify(...))),
@@ -539,6 +551,7 @@ class OutputsMixin(APIClientMixin):
             f"{API_SET_RS485_LIVE}?DONE",
             method="GET",
             priority=API_PRIORITY_CRITICAL,
+            retryable=False,
         )
         text = str(body) if body is not None else ""
         if text.startswith('"') and text.endswith('"'):
