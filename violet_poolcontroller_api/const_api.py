@@ -109,6 +109,11 @@ LOG_TYPES = frozenset({LOG_TYPE_ACTIONS, LOG_TYPE_SWITCHING, LOG_TYPE_ONEWIRE})
 # Mixing ``ALL`` with such prefixes is fine but redundant.
 #
 # Source: includes/getReadings.js (firmware 1.0.9).
+# Feature-flag tokens of the query language above.  Plain ``ALL`` omits
+# every field these tokens unlock, so a "give me everything" refresh must
+# always combine ``ALL`` with all of them.
+FEATURE_FLAG_TOKENS = ("DOSAGE", "RUNTIMES", "PUMPPRIOSTATE", "BACKWASH", "SYSTEM")
+
 SPECIFIC_READING_GROUPS = (
     "ADC",
     "DOSAGE",
@@ -124,6 +129,9 @@ SPECIFIC_READING_GROUPS = (
     "time",
 )
 SPECIFIC_FULL_REFRESH_INTERVAL = 10  # Number of updates before a full refresh
+
+# Complete-dataset query: base READINGS plus every computed field group.
+QUERY_FULL_REFRESH = ",".join(("ALL", *FEATURE_FLAG_TOKENS))
 
 # =============================================================================
 # API ACTIONS

@@ -412,13 +412,16 @@ async def handle_get_readings(request: web.Request) -> web.Response:
         readings_data = _ctrl.build_readings_standalone()
     else:
         readings_data = _ctrl.build_readings()
-        if query and query != "ALL":
+        if query:
             categories = [c.strip().upper() for c in query.split(",")]
-            filtered: dict[str, Any] = {}
-            for key, value in readings_data.items():
-                if any(cat in key.upper() for cat in categories):
-                    filtered[key] = value
-            readings_data = filtered
+            # "ALL" plus feature-flag tokens means "everything" – only a
+            # token list without ALL filters (firmware getReadings.js).
+            if "ALL" not in categories:
+                filtered: dict[str, Any] = {}
+                for key, value in readings_data.items():
+                    if any(cat in key.upper() for cat in categories):
+                        filtered[key] = value
+                readings_data = filtered
 
     return web.json_response({"getReadings": readings_data})
 

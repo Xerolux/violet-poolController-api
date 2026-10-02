@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import socket
 import subprocess
 import sys
@@ -88,6 +89,21 @@ async def test_raw_auth() -> None:
     status, body = await _request(f"http://{HOST}:{PORT}/getReadings?ALL")
     assert status == 200, f"Expected 200, got {status}"
     print(f"  OK: status={status} body_len={len(body)}")
+
+    print()
+    print("=" * 60)
+    print("TEST 1b: ALL plus feature-flag tokens must not filter the payload")
+    print("=" * 60)
+    status_mixed, body_mixed = await _request(
+        f"http://{HOST}:{PORT}/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
+    )
+    assert status_mixed == 200, f"Expected 200, got {status_mixed}"
+    # build_readings() re-randomizes sensor values per call, so compare the
+    # key set: ALL + tokens must return the same unfiltered key set as ALL.
+    keys_all = set(json.loads(body)["getReadings"])
+    keys_mixed = set(json.loads(body_mixed)["getReadings"])
+    assert keys_mixed == keys_all, "ALL + tokens must not filter any keys"
+    print(f"  OK: status={status_mixed} keys={len(keys_mixed)} (same as ALL)")
 
     print()
     print("=" * 60)

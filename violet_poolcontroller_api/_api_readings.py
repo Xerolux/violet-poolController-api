@@ -14,6 +14,7 @@ from .const_api import (
     API_GET_WEATHER_DATA,
     API_PRIORITY_LOW,
     API_READINGS,
+    QUERY_FULL_REFRESH,
 )
 from .readings import VioletReadings
 
@@ -81,6 +82,14 @@ class ReadingsMixin(APIClientMixin):
         to work unchanged.  Typed properties (``readings.pump``,
         ``readings.ph``, etc.) are available as an additive convenience.
 
+        The request uses ``ALL`` combined with every feature-flag token
+        (``DOSAGE``, ``RUNTIMES``, ``PUMPPRIOSTATE``, ``BACKWASH``,
+        ``SYSTEM``): plain ``ALL`` omits the computed fields these tokens
+        unlock — daily dosing totals, runtime strings, priority-state
+        composites, backwash counters, SYSTEM diagnostics — which leaves the
+        corresponding sensors at ``unknown`` (firmware ``getReadings.js``,
+        observed after a controller restart).
+
         Returns:
             A :class:`VioletReadings` instance wrapping all readings.
 
@@ -90,7 +99,7 @@ class ReadingsMixin(APIClientMixin):
         """
         response = await self._request_json_dict(
             API_READINGS,
-            query="ALL",
+            query=QUERY_FULL_REFRESH,
             payload_name="getReadings",
         )
         flat = self._flatten_getreadings_response(response)
@@ -109,7 +118,7 @@ class ReadingsMixin(APIClientMixin):
         """
         response = await self._request_json_dict(
             API_READINGS,
-            query="ALL",
+            query=QUERY_FULL_REFRESH,
             payload_name="getReadings",
         )
         # Use flat dict directly (VioletReadings wrapping not needed here)
