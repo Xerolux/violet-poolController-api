@@ -42,6 +42,7 @@ from violet_poolcontroller_api.const_api import (
     ERROR_SEVERITY_INFO,
     ERROR_SEVERITY_REMINDER,
     ERROR_SEVERITY_WARNING,
+    QUERY_FULL_REFRESH,
     TARGET_PH,
 )
 
@@ -92,7 +93,7 @@ async def test_get_readings_success(
     api_client: VioletPoolAPI,
 ) -> None:
     """Test get_readings returns the correct parsed JSON dictionary."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_data = {"PUMPSTATE": "2", "PH": 7.2}
     mock_aioresponse.get(url, payload=mock_data, status=200)
 
@@ -100,6 +101,25 @@ async def test_get_readings_success(
 
     assert isinstance(result, Mapping)
     assert dict(result) == mock_data
+
+
+@pytest.mark.asyncio
+async def test_get_readings_requests_all_feature_flags(
+    mock_aioresponse: aioresponses,
+    api_client: VioletPoolAPI,
+) -> None:
+    """Plain ``ALL`` omits the computed fields (daily dosing totals, runtime
+    strings, priority-state composites) on some firmware states, leaving the
+    matching sensors at ``unknown``.  get_readings() must therefore always
+    ask for ``ALL`` combined with every feature-flag token."""
+    url = f"http://192.168.1.100/getReadings?{QUERY_FULL_REFRESH}"
+    mock_aioresponse.get(url, payload={"PUMPSTATE": "2"}, status=200)
+
+    await api_client.get_readings()
+
+    # aioresponses matches the URL exactly; reaching this point without an
+    # unsatisfied-mock error proves the full query string was sent.
+    assert mock_aioresponse.requests
 
 
 @pytest.mark.asyncio
@@ -164,7 +184,7 @@ async def test_request_server_error(
     api_client: VioletPoolAPI,
 ) -> None:
     """Test that a 500 error raises VioletPoolAPIError after retrying."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(url, status=500)
     # the second time it retries
     mock_aioresponse.get(url, status=500)
@@ -358,7 +378,7 @@ async def test_get_readings_standalone_list_format(
     api_client: VioletPoolAPI,
 ) -> None:
     """Test get_readings parses the standalone list format correctly."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_data = {
         "getReadings": [
             {
@@ -394,7 +414,7 @@ async def test_dosing_standalone_detection_dict_format(
     standalone_api_client: VioletPoolAPI,
 ) -> None:
     """Test dosing_standalone is set to False when dict format is received."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_data = {
         "getReadings": {
             "PUMPSTATE": "2",
@@ -414,7 +434,7 @@ async def test_dosing_standalone_detection_dict_format(
 @pytest.mark.asyncio
 async def test_get_hardware_profile(mock_aioresponse, api_client):
     """Test get_hardware_profile correctly detects components via alive counters."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
 
     # 1. Base module only (no DOS, EXT)
     mock_aioresponse.get(
@@ -524,7 +544,7 @@ async def test_module_alive_on_zero_count(mock_aioresponse, api_client):
     old code required value > 0, which caused EXT1_* readings to be filtered
     and the relay switch to appear broken right after a restart.
     """
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(
         url,
         payload={
@@ -548,7 +568,7 @@ async def test_module_alive_on_zero_count(mock_aioresponse, api_client):
 @pytest.mark.asyncio
 async def test_ext1_readings_not_filtered_when_detected(mock_aioresponse, api_client):
     """EXT1_* readings are included when extension_module_1 is detected."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(
         url,
         payload={
@@ -572,7 +592,7 @@ async def test_ext1_readings_not_filtered_when_detected(mock_aioresponse, api_cl
 @pytest.mark.asyncio
 async def test_ext1_readings_filtered_when_not_detected(mock_aioresponse, api_client):
     """EXT1_* readings are stripped when extension_module_1 key is absent."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(
         url,
         payload={
@@ -594,7 +614,7 @@ async def test_ext1_readings_filtered_when_not_detected(mock_aioresponse, api_cl
 @pytest.mark.asyncio
 async def test_get_hardware_profile_standalone_dosing(mock_aioresponse, standalone_api_client):
     """Test get_hardware_profile with a standalone dosing configuration."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     # Using the standalone list format
     mock_data = {
         "getReadings": [
@@ -1874,7 +1894,7 @@ async def test_client_error_fails_fast_without_retry(
     api_client: VioletPoolAPI,
 ) -> None:
     """A 4xx response raises immediately instead of being retried."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(url, status=401, body="Unauthorized")
 
     with pytest.raises(VioletPoolAPIError, match="HTTP 401"):
@@ -1887,7 +1907,7 @@ async def test_client_error_does_not_trip_circuit_breaker(
     api_client: VioletPoolAPI,
 ) -> None:
     """Deterministic 4xx errors must not count as circuit breaker failures."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     threshold = api_client._circuit_breaker.failure_threshold
 
     for _ in range(threshold + 1):
@@ -1907,7 +1927,7 @@ async def test_empty_get_readings_payload_is_flattened(
     mock_aioresponse: aioresponses,
     api_client: VioletPoolAPI,
 ) -> None:
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(url, payload={"getReadings": {}}, status=200)
 
     readings = await api_client.get_readings()
@@ -1937,7 +1957,7 @@ async def test_basic_auth_uses_authorization_header(
     mock_aioresponse: aioresponses,
     api_client: VioletPoolAPI,
 ) -> None:
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(url, payload={}, status=200)
 
     await api_client.get_readings()
@@ -1953,7 +1973,7 @@ async def test_server_error_still_counts_for_circuit_breaker(
     api_client: VioletPoolAPI,
 ) -> None:
     """5xx errors keep counting as circuit breaker failures."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(url, status=500, body="boom", repeat=True)
 
     with pytest.raises(VioletPoolAPIError):
@@ -1976,7 +1996,7 @@ async def test_rate_limiter_reacquired_on_every_retry(
     retry loop, so retries fired real HTTP requests without ever going
     through the limiter again.
     """
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(url, status=500, body="boom", repeat=True)
     # Backoff sleeps aren't what this test verifies; skip them for speed.
     monkeypatch.setattr("violet_poolcontroller_api.api.asyncio.sleep", AsyncMock())
@@ -2259,7 +2279,7 @@ async def test_reads_are_still_retried(
     mock_aioresponse: aioresponses,
 ) -> None:
     """The read path keeps its retries; repeating a read costs nothing."""
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(url, status=500, body="boom")
     mock_aioresponse.get(url, status=500, body="boom")
     mock_aioresponse.get(url, payload={"getReadings": {"PUMP": "1"}}, status=200)
@@ -2282,7 +2302,7 @@ async def test_rate_limit_wait_timeout_fails_instead_of_bypassing(
     Sending anyway let every caller that waited out the timeout hit the
     controller at once, which is the pile-up the limiter exists to prevent.
     """
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     mock_aioresponse.get(url, payload={"getReadings": {}}, status=200)
 
     async with aiohttp.ClientSession() as session:
@@ -2308,7 +2328,7 @@ async def test_html_login_page_does_not_open_the_circuit_breaker(
     Counting those as transient failures opened the breaker and replaced the
     payload error that explains the actual problem.
     """
-    url = "http://192.168.1.100/getReadings?ALL"
+    url = "http://192.168.1.100/getReadings?ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM"
     for _ in range(8):
         mock_aioresponse.get(url, body="<html>login</html>", status=200)
 

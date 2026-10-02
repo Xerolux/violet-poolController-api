@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.0.40 (2026-10-02)
+
+### Fixes
+
+- **fix: `getReadings?ALL` alone no longer returns the computed fields on every
+  firmware state.** After a controller restart/timeout the firmware omits the
+  feature-flag-gated groups — daily dosing totals (`DOS_*_DAILY_DOSING_AMOUNT_ML`,
+  `DOS_*_TOTAL_CAN_AMOUNT_ML`, `DOS_*_REMAINING_RANGE`), runtime strings,
+  priority-state composites (`PUMPSTATE` & co.), backwash counters and `SYSTEM_*`
+  diagnostics — from a plain `ALL` response, which left the matching Home
+  Assistant sensors at `unknown` (reported by a user on poolsteuerung.de, verified
+  against the `getReadings.js` query language). `get_readings()` and
+  `get_hardware_profile()` now request `ALL,DOSAGE,RUNTIMES,PUMPPRIOSTATE,BACKWASH,SYSTEM`
+  (`QUERY_FULL_REFRESH`). Verified against a live controller on firmware 1.2.5:
+  the mixed query returns exactly the same 419-key payload as plain `ALL`, so
+  nothing changes where plain `ALL` already worked. The mock server now treats
+  `ALL` plus tokens as "no filtering", matching the firmware.
+
 ## v0.0.39 (2026-09-08)
 
 Findings of a full read-only audit of 0.0.38, fixed. The first two are the
